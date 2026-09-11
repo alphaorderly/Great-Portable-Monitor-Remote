@@ -1,0 +1,116 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  app:
+    name: App (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-15
+            python-arch: arm64
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            python-arch: x64
+          - platform: windows-arm64
+            runner: windows-11-arm
+            python-arch: arm64
+          - platform: windows-x86_64
+            runner: windows-2022
+            python-arch: x64
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.python-arch }}
+          cache: pip
+          cache-dependency-path: python/requirements*.txt
+      - name: Configure native ARM64 compiler for hidapi
+        if: matrix.platform == 'windows-arm64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: Install dependencies
+        run: python -m pip install -r python/requirements-build.txt
+      - name: Test Python and Qt
+        run: python -m unittest discover -s python/tests -v
+      - name: Build native application
+        run: python scripts/build_app.py --platform ${{ matrix.platform }}
+      - name: Test extracted application and architecture
+        run: python scripts/smoke_app.py --platform ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: release/*.zip
+          if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-${{ matrix.platform }}
+          path: build/preview-*.png
+          if-no-files-found: error
+
+  firmware:
+    name: ESP32 firmware and C regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container: espressif/idf:v5.5.5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build firmware and run sanitizer tests
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          python firmware/scripts/build.py -B build build
+          python firmware/tests/native/run_tests.py --idf-path "$IDF_PATH"
+          python scripts/package_firmware.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-firmware-esp32
+          path: release/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish complete release
+    needs: [app, firmware]
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: Upload checksums and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/publish_release.py

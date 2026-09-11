@@ -1,0 +1,48 @@
+"""Build a native app archive; must run with a matching native Python."""
+import argparse
+import platform
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--platform', choices=['macos-arm64', 'macos-x86_64', 'windows-arm64', 'windows-x86_64'], required=True)
+args = parser.parse_args()
+os_name, arch = args.platform.split('-')
+actual_arch = {'AMD64': 'x86_64', 'aarch64': 'arm64', 'ARM64': 'arm64'}.get(platform.machine(), platform.machine())
+if actual_arch != arch or sys.platform != {'macos': 'darwin', 'windows': 'win32'}[os_name]:
+    sys.exit(f'Native build required: requested {args.platform}, running {sys.platform}/{actual_arch}')
+command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--windowed', '--onedir',
+           '--name', 'RemoteKeyMapper', '--distpath', str(ROOT / 'dist'),
+           '--workpath', str(ROOT / 'build/pyinstaller'), '--specpath', str(ROOT / 'build'),
+           '--paths', str(ROOT / 'python/gui')]
+if os_name == 'macos':
+    command += ['--target-arch', arch, '--osx-bundle-identifier', 'com.alphaorderly.remote-key-mapper']
+subprocess.run(command + [str(ROOT / 'python/run_keymapper.py')], cwd=ROOT, check=True)
+stage = ROOT / 'build/package' / f'RemoteKeyMapper-{args.platform}'
+if stage.exists():
+    shutil.rmtree(stage)
+stage.mkdir(parents=True)
+name = 'RemoteKeyMapper.app' if os_name == 'macos' else 'RemoteKeyMapper'
+shutil.copytree(ROOT / 'dist' / name, stage / name, symlinks=True)
+# Keep the documentation paths and screenshots usable inside an offline package.
+for file in ['README.md', 'README.en.md']:
+    shutil.copy2(ROOT / file, stage / file)
+(stage / 'docs').mkdir()
+for file in ['FIRMWARE.md', 'WINDOWS_COMPATIBILITY.md', 'RELEASING.md']:
+    shutil.copy2(ROOT / 'docs' / file, stage / 'docs' / file)
+(stage / 'python/gui').mkdir(parents=True)
+shutil.copy2(ROOT / 'python/README.md', stage / 'python/README.md')
+for file in (ROOT / 'python/gui').glob('*preview.png'):
+    shutil.copy2(file, stage / 'python/gui' / file.name)
+release = ROOT / 'release'
+release.mkdir(exist_ok=True)
+archive = release / f'{stage.name}.zip'
+if os_name == 'macos':
+    # Preserve framework symlinks, bundle permissions and ad-hoc code signatures.
+    subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(stage), str(archive)], check=True)
+else:
+    shutil.make_archive(str(archive.with_suffix('')), 'zip', stage.parent, stage.name)
+print(archive)
