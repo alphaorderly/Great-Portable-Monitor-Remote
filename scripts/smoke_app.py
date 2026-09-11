@@ -31,7 +31,9 @@ with tempfile.TemporaryDirectory(prefix='remote-package-') as tmp:
         expected = 0xAA64 if args.platform.endswith('arm64') else 0x8664
         if data[pe:pe+4] != b'PE\0\0' or machine != expected:
             raise RuntimeError(f'Wrong PE architecture: {machine:#x}')
-    env = {**os.environ, 'QT_QPA_PLATFORM': 'offscreen'}
+    # Qt's generic offscreen plugin on Windows cannot see the system fonts.
+    qpa = 'windows' if args.platform.startswith('windows-') else 'offscreen'
+    env = {**os.environ, 'QT_QPA_PLATFORM': qpa}
     for variable in ('PYTHONPATH', 'PYTHONHOME'):
         env.pop(variable, None)
     subprocess.run([str(binary), '--self-test'], cwd=tmp, env=env, check=True, timeout=60)

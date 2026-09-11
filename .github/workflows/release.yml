@@ -36,7 +36,7 @@ jobs:
             runner: windows-2022
             python-arch: x64
     env:
-      QT_QPA_PLATFORM: offscreen
+      QT_QPA_PLATFORM: ${{ startsWith(matrix.platform, 'windows-') && 'windows' || 'offscreen' }}
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v5
@@ -51,6 +51,13 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: arm64
+      - name: Keep MSVC source-build paths below MAX_PATH
+        if: matrix.platform == 'windows-arm64'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\t | Out-Null
+          "TEMP=C:\t" >> $env:GITHUB_ENV
+          "TMP=C:\t" >> $env:GITHUB_ENV
       - name: Install dependencies
         run: python -m pip install -r python/requirements-build.txt
       - name: Test Python and Qt
