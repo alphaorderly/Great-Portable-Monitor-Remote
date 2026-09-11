@@ -6,7 +6,7 @@ import threading
 import time
 import hid
 from PySide6.QtCore import QObject, Signal
-from protocol import is_bridge
+from discovery import discover
 from connection import ConnectionEvent, ConnectionState, DeviceIdentity, DeviceSelectionRequired, ReconnectPolicy
 from hid_session import HidSession
 from debugging import DebugBatch, DebugDecoder, MODES
@@ -16,6 +16,7 @@ LOG = logging.getLogger("keymapper")
 
 class HidWorker(QObject):
     devices = Signal(object)
+    discovery = Signal(object)
     connection = Signal(object)
     settings = Signal(object, str)
     problem = Signal(str)
@@ -46,8 +47,10 @@ class HidWorker(QObject):
         self.dropped = 0
         self.last_emit = self.clock()
 
-    def _state(self, state, reason="", retry_at=None):
-        event = ConnectionEvent(state, reason, retry_at, self.generation)
+    def _state(self, state, reason="", retry_at=None, device=None):
+        event = ConnectionEvent(state, reason, retry_at, self.generation,
+                                device["path"] if device else None,
+                                DeviceIdentity.serial_of(device) if device else "")
         # Repeated 10-second retries remain visible in the UI without flooding logs.
         if (state, reason) != self.last_state:
             log = LOG.debug if self.retry.attempts > 4 else LOG.info
@@ -56,7 +59,11 @@ class HidWorker(QObject):
         self.connection.emit(event)
 
     def _devices(self):
-        return [d for d in self.enumerate_devices() if is_bridge(d)]
+        result = discover(self.enumerate_devices)
+        self.discovery.emit(result)
+        if result.error:
+            raise OSError(result.message)
+        return result.devices
 
     def _cancelled(self):
         return self.cancel_requested.is_set() or self.stopping.is_set()
@@ -80,7 +87,7 @@ class HidWorker(QObject):
         if not self.active or self._cancelled():
             return
         self.retry.retry_at = None
-        self._state(ConnectionState.CONNECTING, "선택한 ESP32 HID에 연결하는 중…")
+        self._state(ConnectionState.CONNECTING, "선택한 설정용 HID에 연결하는 중…")
         try:
             candidate = self.target.select(self._devices())
             if self._cancelled():
@@ -112,12 +119,12 @@ class HidWorker(QObject):
             self._reset_debug()
             # Settings must be applied before READY; opening a handle isn't readiness.
             self.settings.emit(snapshot, operation)
-            self._state(ConnectionState.READY, reason)
+            self._state(ConnectionState.READY, reason, device=candidate)
         except OSError as exc:
             self._transport_failed(exc)
         except ValueError as exc:
             self._fatal(exc if isinstance(exc, DeviceSelectionRequired) else
-                        ValueError(f"장치 설정 형식을 읽을 수 없습니다. 앱·펌웨어 버전을 확인하세요: {exc}"))
+                        ValueError(f"ESP32 설정 프로토콜 불일치: 지원 장치인지 또는 앱·펌웨어 버전이 맞는지 확인하세요. {exc}"))
         except Exception as exc:
             LOG.exception("HID initialization failed")
             self._fatal(exc)
@@ -128,11 +135,9 @@ class HidWorker(QObject):
             self.debug_mode = payload if payload in MODES else None
             self._reset_debug()
         elif command == "scan":
-            try:
-                self.devices.emit(self._devices())
-            except Exception as exc:
-                self.devices.emit([])
-                self.problem.emit(f"HID 검색 실패: {exc}")
+            result = discover(self.enumerate_devices)
+            self.discovery.emit(result)
+            self.devices.emit(result.devices)
         elif command == "disconnect":
             self.active = False
             self.generation += 1

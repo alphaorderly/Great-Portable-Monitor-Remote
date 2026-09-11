@@ -10,13 +10,14 @@ ESP32에 연결된 리모컨의 버튼 동작을 설정하는 macOS·Windows 앱
 python python/run_keymapper.py
 python python/run_keymapper.py --debug
 python python/run_keymapper.py --list
+python python/run_keymapper.py --diagnostics hid-diagnostics.json
 python python/run_keymapper.py --self-test
 python python/run_keymapper.py --screenshot preview.png
 ```
 
 Python 3.12에 `python/requirements.txt`의 의존성을 설치한 뒤 저장소 루트에서 실행하세요. macOS용 `run_keymapper.zsh`와 Windows용 `run_keymapper.cmd`로 실행하면 루트의 `.venv-gui`를 사용합니다. `--self-test`와 `--screenshot`은 장치를 연결하지 않고 사용할 수 있습니다.
 
-1. **기기 찾기 → 연결**: ESP32의 현재 매핑을 읽습니다.
+1. **기기 찾기 → 연결**: ESP32의 현재 매핑을 읽습니다. 이름을 확인하지 못한 Bluetooth 설정용 HID는 **Bluetooth 설정 장치 · 확인 필요**로 표시됩니다. 이 후보는 연결 후 ESP32 설정 형식 검증이 성공해야 편집·저장이 활성화됩니다.
 2. **일반 모드 / 마우스 커서 모드**: 설정할 모드를 선택합니다. 다른 모드로 이동해도 편집 내용은 유지됩니다.
 3. **기본값 대상 → 현재 모드 기본값**: 선택한 OS의 기본값을 현재 편집 모드에 불러옵니다. 앱목록은 macOS Command+Tab, Windows/Linux Alt+Tab입니다. OS 선택만으로 기존 매핑을 바꾸지는 않습니다.
 4. **ESP32에 적용·저장**: 두 모드를 함께 저장하고, 장치에서 다시 읽어 저장 결과를 확인합니다.
@@ -96,3 +97,23 @@ python python/run_keymapper.py --self-test
 저장 도중 통신이 끊겨도 저장 명령을 자동으로 다시 보내지 않습니다. 재연결 후 장치 설정을 읽어 요청한 설정·revision과 비교합니다. 일치하면 장치에서 요청한 설정을 확인했다는 메시지를, 다르면 자동으로 다시 저장하지 않았다는 메시지를 표시합니다. 화면의 편집 내용과 실제 장치 상태를 확인한 뒤 명시적으로 저장하세요.
 
 소스 실행 시 검색·연결·초기 읽기·재연결 상태는 표준 Python 로그에도 기록됩니다. 장기간 반복되는 재시도 로그는 DEBUG 수준으로 줄이며, HID 경로나 페어링 키를 진단 메시지에 출력하지 않습니다.
+
+## Windows 기기 검색과 진단 저장
+
+검색은 HIDAPI가 반환한 장치 정보만 사용하며 설정을 읽거나 쓰지 않습니다. `FF00 / Usage 1`에 제품명 또는 제조사가 일치하는 장치는 기존대로 표시합니다. 이름이 일치하지 않아도 HIDAPI가 Bluetooth로 확인한 같은 Usage의 장치는 미확인 후보로 표시합니다. 같은 Usage를 사용하는 USB 장치와 버스 종류를 확인하지 못한 장치는 이 후보 경로에서 제외합니다.
+
+미확인 후보를 선택하면 검증 전까지 매핑 편집·저장이 비활성화됩니다. **연결**을 누를 때 선택한 장치의 Feature Report ID 5를 읽고 기존 버전·길이·설정 검증을 수행합니다. 성공하면 ESP32로 표시하며, 형식이 다르면 **ESP32 설정 프로토콜 불일치**로 연결을 닫습니다. 통신 실패에는 기존 재시도 정책을 적용하며 자동 저장은 하지 않습니다.
+
+**검색 진단 저장**은 마지막으로 완료된 검색 결과를 JSON으로 저장합니다. 재연결을 위한 검색도 마지막 결과에 반영됩니다. 후보 없음, 확인 필요한 후보 발견, 검색 오류를 별도로 안내합니다. 이미 Bluetooth가 연결됐어도 HIDAPI에서 누락될 수 있으므로 빈 결과를 미연결로 단정하지 않습니다.
+
+배포 exe는 Python 설치 없이 다음과 같이 진단 파일을 만들 수도 있습니다. 실행 파일이 있는 폴더에서 실행하세요.
+
+```powershell
+.\RemoteKeyMapper.exe --diagnostics .\hid-diagnostics.json
+```
+
+이 옵션은 GUI와 작업 스레드를 시작하지 않습니다. 종료 코드는 검색 완료(후보 0개 포함) `0`, 검색 오류를 파일에 기록한 경우 `1`, 파일 저장 실패 `2`입니다. `--list`, `--self-test`, `--screenshot`과 동시에 사용할 수 없습니다. 창 모드 exe에서는 `--list`의 표준 출력이 보이지 않을 수 있으므로 진단 파일을 사용하세요.
+
+JSON에는 앱 빌드 식별자(커밋과 소스 해시), OS·CPU·Python·HID 패키지·내장 HIDAPI 버전, 검색 시각, 필터 전 메타데이터, 분류·표시 여부·제외 이유와 검색 오류가 포함됩니다. 바이트 경로는 읽기용 문자열과 복원 가능한 16진수로 저장합니다. 설정 보고서·입력 이벤트·페어링 키는 수집하지 않습니다.
+
+원본 목록에 장치가 있으면 분류와 제외 이유를 확인할 수 있습니다. Windows 장치 목록에는 있지만 진단의 원본 목록에 없다면 HIDAPI 자체 누락 조사 대상입니다. 이 1차 수정에는 Windows API 직접 검색이나 펌웨어 변경을 포함하지 않습니다.

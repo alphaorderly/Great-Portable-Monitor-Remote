@@ -4,15 +4,15 @@ import logging
 from pathlib import Path
 import sys
 
-import hid
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
     QMainWindow, QPushButton, QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QTabWidget,
 )
 from mapping import ACTIONS, defaults_for_host, Entry, KEY, Snapshot, SPEED_DEFAULT, SPEED_MAX
 from platform_support import MODIFIERS, default_host
-from protocol import BUTTONS, DEVICE_NAME, is_bridge
+from protocol import BUTTONS, DEVICE_NAME
+from discovery import UNVERIFIED, discover, device_label, save_diagnostics
 from worker import HidWorker
 from connection import ConnectionEvent, ConnectionState
 from debug_panel import DebugPanel
@@ -64,8 +64,10 @@ class KeyMapper(QMainWindow):
         self.dirty = False
         self.loading = False
         self.controls = {}
+        self.last_discovery = None
         self.worker = HidWorker()
         self.worker.devices.connect(self.on_devices)
+        self.worker.discovery.connect(self.on_discovery)
         self.worker.connection.connect(self.on_connection)
         self.worker.settings.connect(self.on_settings)
         self.worker.problem.connect(self.on_problem)
@@ -81,7 +83,7 @@ class KeyMapper(QMainWindow):
 
         connection = QHBoxLayout()
         self.devices = QComboBox()
-        self.devices.addItem("Bluetooth에서 ESP32를 연결하세요", None)
+        self.devices.addItem("기기 찾기로 설정용 장치를 검색하세요", None)
         connection.addWidget(self.devices, 1)
         self.scan = QPushButton("기기 찾기")
         self.scan.clicked.connect(self.scan_devices)
@@ -92,6 +94,9 @@ class KeyMapper(QMainWindow):
         self.disconnect_button = QPushButton("연결 해제")
         self.disconnect_button.clicked.connect(self.disconnect_device)
         connection.addWidget(self.disconnect_button)
+        self.diagnostics_button = QPushButton("검색 진단 저장")
+        self.diagnostics_button.clicked.connect(self.export_diagnostics)
+        connection.addWidget(self.diagnostics_button)
         layout.addLayout(connection)
 
         outer_layout = layout
@@ -199,6 +204,7 @@ class KeyMapper(QMainWindow):
         self.status = label("기기를 연결하면 저장된 매핑을 읽습니다. 처음 사용 시 키 매핑용 펌웨어를 먼저 플래시하세요.", "status")
         outer_layout.addWidget(self.status)
         self.populate(self.drafts[0])
+        self.devices.currentIndexChanged.connect(self.refresh_enabled)
         self.refresh_enabled()
         if start_worker:
             self.worker.runner.start()
@@ -268,16 +274,23 @@ class KeyMapper(QMainWindow):
         self.edited()
 
     def refresh_enabled(self):
+        unverified = self.devices.currentData(Qt.ItemDataRole.UserRole + 1) == UNVERIFIED and not self.connected
+        editable = not self.busy and not unverified
         self.connect_button.setEnabled(not self.busy and not self.connected and self.connection_state != ConnectionState.RETRY_WAIT and bool(self.devices.currentData()))
         self.disconnect_button.setEnabled(self.connection_state in (
             ConnectionState.CONNECTING, ConnectionState.READING, ConnectionState.READY, ConnectionState.RETRY_WAIT))
         self.devices.setEnabled(not self.busy and not self.connected and self.connection_state != ConnectionState.RETRY_WAIT)
         self.scan.setEnabled(not self.busy and not self.connected and self.connection_state != ConnectionState.RETRY_WAIT)
-        self.table.setEnabled(not self.busy)
-        self.mapping_mode.setEnabled(not self.busy)
-        self.mouse_speed.setEnabled(not self.busy)
-        self.host_preset.setEnabled(not self.busy)
-        self.defaults_button.setEnabled(not self.busy)
+        self.diagnostics_button.setEnabled(self.last_discovery is not None)
+        self.table.setEnabled(editable)
+        self.mapping_mode.setEnabled(editable)
+        self.mouse_speed.setEnabled(editable)
+        self.host_preset.setEnabled(editable)
+        self.defaults_button.setEnabled(editable)
+        if unverified:
+            original_label = self.devices.currentData(Qt.ItemDataRole.UserRole + 2)
+            if original_label:
+                self.devices.setItemText(self.devices.currentIndex(), original_label)
         self.read_button.setEnabled(self.connected and not self.busy)
         self.apply_button.setEnabled(self.connected and self.revision is not None and self.dirty and not self.busy)
 
@@ -287,14 +300,37 @@ class KeyMapper(QMainWindow):
         self.refresh_enabled()
         self.worker.commands.put(("scan", None))
 
+    def on_discovery(self, result):
+        self.last_discovery = result
+        self.diagnostics_button.setEnabled(True)
+
+    def export_diagnostics(self):
+        if self.last_discovery is None:
+            return
+        # Capture the latest completed search, even if a retry finishes while
+        # the native file dialog's nested event loop is running.
+        result = self.last_discovery
+        filename, _ = QFileDialog.getSaveFileName(self, "검색 진단 저장", "remote-hid-diagnostics.json", "JSON (*.json)")
+        if not filename:
+            return
+        try:
+            save_diagnostics(result, filename)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "검색 진단 저장 실패", str(exc))
+        else:
+            QMessageBox.information(self, "검색 진단 저장", "마지막 검색 결과를 저장했습니다.")
+
     def on_devices(self, devices):
         self.devices.clear()
         for index, device in enumerate(devices, 1):
-            self.devices.addItem(f"{DEVICE_NAME} · {device.get('serial_number') or index}", device["path"])
+            title = device_label(device, index)
+            self.devices.addItem(title, device["path"])
+            self.devices.setItemData(index - 1, device.get("discovery_kind"), Qt.ItemDataRole.UserRole + 1)
+            self.devices.setItemData(index - 1, title, Qt.ItemDataRole.UserRole + 2)
         if not devices:
-            self.devices.addItem("ESP32 HID를 찾지 못했습니다", None)
+            self.devices.addItem("설정용 장치 후보가 없습니다", None)
         self.busy = False
-        self.status.setText("기기를 선택하고 연결하세요." if devices else "운영체제의 Bluetooth 설정에서 ESP32를 연결한 뒤 다시 검색하세요.")
+        self.status.setText((self.last_discovery or discover(lambda: devices)).message)
         self.refresh_enabled()
 
     def connect_device(self):
@@ -302,7 +338,7 @@ class KeyMapper(QMainWindow):
         if path:
             self.disconnect_requested = False
             self.busy = True
-            self.status.setText("ESP32에 연결하고 저장된 매핑을 읽는 중…")
+            self.status.setText("선택한 장치에 연결하고 ESP32 설정 형식을 확인하는 중…")
             self.refresh_enabled()
             self.worker.request_connect(path)
 
@@ -320,6 +356,11 @@ class KeyMapper(QMainWindow):
         self.connection_generation = event.generation
         self.connection_state = event.state
         self.connected = event.state == ConnectionState.READY
+        if self.connected and event.device_path is not None:
+            index = self.devices.currentIndex()
+            if index >= 0:
+                self.devices.setItemData(index, event.device_path)
+                self.devices.setItemText(index, f"{DEVICE_NAME} · {event.device_serial or index + 1}")
         self.debug_panel.set_connected(self.connected)
         if not self.connected:
             self.revision = None
@@ -398,14 +439,25 @@ def main():
     parser.add_argument("--list", action="store_true", help="ESP32 설정용 HID 목록")
     parser.add_argument("--debug", action="store_true", help="입력 디버깅 탭에서 기록을 켜고 시작")
     parser.add_argument("--self-test", action="store_true", help="하드웨어 없이 패키지·Qt·HIDAPI 실행 확인 후 종료")
+    parser.add_argument("--diagnostics", type=Path, help="GUI 없이 HID 검색 진단 JSON을 지정한 경로에 저장")
     args = parser.parse_args()
+    if sum(bool(value) for value in (args.diagnostics, args.list, args.self_test, args.screenshot)) > 1:
+        parser.error("--diagnostics, --list, --self-test, --screenshot 중 하나만 지정하세요.")
+    if args.diagnostics:
+        result = discover()
+        try:
+            save_diagnostics(result, args.diagnostics)
+        except OSError as exc:
+            logging.getLogger("keymapper").error("검색 진단 파일 저장 실패: %s", exc)
+            return 2
+        return 1 if result.error else 0
     if args.list:
-        matches = [d for d in hid.enumerate() if is_bridge(d)]
-        for device in matches:
-            print({key: device.get(key) for key in ("product_string", "usage_page", "usage", "path")})
-        if not matches:
-            print("ESP32 HID가 없습니다. 운영체제의 Bluetooth 설정에서 먼저 연결하세요.")
-        return 0
+        result = discover()
+        for index, device in enumerate(result.devices, 1):
+            print({"label": device_label(device, index), **{key: device.get(key) for key in
+                   ("product_string", "usage_page", "usage", "path", "discovery_kind")}})
+        print(result.message)
+        return 1 if result.error else 0
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Remote Key Mapper")
     # Let Qt select the system font and its Korean fallback on every platform.

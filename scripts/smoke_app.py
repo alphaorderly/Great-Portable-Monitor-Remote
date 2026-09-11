@@ -1,5 +1,6 @@
 """Extract and launch the distributed app without connecting to hardware."""
 import argparse
+import json
 import os
 from pathlib import Path
 import platform
@@ -36,6 +37,23 @@ with tempfile.TemporaryDirectory(prefix='remote-package-') as tmp:
     env = {**os.environ, 'QT_QPA_PLATFORM': qpa}
     for variable in ('PYTHONPATH', 'PYTHONHOME'):
         env.pop(variable, None)
+    diagnostics = tmp / 'hid-diagnostics.json'
+    # This must work in a windowed exe and must not initialize a GUI. An
+    # enumeration error is still useful diagnostics, with exit status 1.
+    result = subprocess.run([str(binary), '--diagnostics', str(diagnostics)], cwd=tmp,
+                            env={**env, 'QT_QPA_PLATFORM': 'diagnostics-must-not-start-qt'}, timeout=60)
+    report = json.loads(diagnostics.read_text(encoding='utf-8'))
+    if result.returncode != (1 if report['search_error'] else 0):
+        raise RuntimeError('Diagnostic exit status does not match search result')
+    if report['schema_version'] != 1 or report['raw_count'] != len(report['devices']):
+        raise RuntimeError('Invalid search diagnostic schema/count')
+    expected_build = json.loads((ROOT / 'build/build-info.json').read_text(encoding='utf-8'))
+    if report['app'] != expected_build or report['app']['build_id'] == 'unknown':
+        raise RuntimeError('Packaged build identity is missing or incorrect')
+    if report['runtime']['hid_package_version'] != '0.15.0' or report['runtime']['hidapi_version'].startswith('unavailable'):
+        raise RuntimeError('Packaged HIDAPI version unavailable')
+    (ROOT / 'build' / f'diagnostics-summary-{args.platform}.json').write_text(
+        json.dumps({key: value for key, value in report.items() if key != 'devices'}, indent=2) + '\n', encoding='utf-8')
     subprocess.run([str(binary), '--self-test'], cwd=tmp, env=env, check=True, timeout=60)
     output = ROOT / 'build' / f'preview-{args.platform}.png'
     output.unlink(missing_ok=True)

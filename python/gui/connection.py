@@ -18,6 +18,8 @@ class ConnectionEvent:
     reason: str = ""
     retry_at: float | None = None
     generation: int = 0
+    device_path: bytes | None = None
+    device_serial: str = ""
 
 
 class DeviceSelectionRequired(ValueError):
@@ -51,7 +53,7 @@ class DeviceIdentity:
                 raise DeviceSelectionRequired("같은 일련번호의 기기가 여러 개입니다. 기기를 다시 선택하세요.")
         if devices:
             raise DeviceSelectionRequired("이전 기기인지 확인할 수 없습니다. 기기를 다시 선택하세요.")
-        raise OSError("ESP32 HID가 없습니다. OS Bluetooth 연결을 확인하세요.")
+        raise OSError("선택한 HID를 검색 결과에서 찾지 못했습니다. 검색 진단 또는 Bluetooth 상태를 확인하세요.")
 
 
 @dataclass

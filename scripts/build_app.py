@@ -1,5 +1,6 @@
 """Build a native app archive; must run with a matching native Python."""
 import argparse
+import json
 import platform
 from pathlib import Path
 import shutil
@@ -14,10 +15,15 @@ os_name, arch = args.platform.split('-')
 actual_arch = {'AMD64': 'x86_64', 'aarch64': 'arm64', 'ARM64': 'arm64'}.get(platform.machine(), platform.machine())
 if actual_arch != arch or sys.platform != {'macos': 'darwin', 'windows': 'win32'}[os_name]:
     sys.exit(f'Native build required: requested {args.platform}, running {sys.platform}/{actual_arch}')
+sys.path.insert(0, str(ROOT / 'python/gui'))
+from build_info import source_build_info
+metadata_path = ROOT / 'build' / 'build-info.json'
+metadata_path.parent.mkdir(parents=True, exist_ok=True)
+metadata_path.write_text(json.dumps(source_build_info(ROOT), indent=2) + '\n', encoding='utf-8')
 command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--windowed', '--onedir',
            '--name', 'RemoteKeyMapper', '--distpath', str(ROOT / 'dist'),
            '--workpath', str(ROOT / 'build/pyinstaller'), '--specpath', str(ROOT / 'build'),
-           '--paths', str(ROOT / 'python/gui')]
+           '--paths', str(ROOT / 'python/gui'), '--add-data', f'{metadata_path}:.']
 if os_name == 'macos':
     command += ['--target-arch', arch, '--osx-bundle-identifier', 'com.alphaorderly.remote-key-mapper']
 subprocess.run(command + [str(ROOT / 'python/run_keymapper.py')], cwd=ROOT, check=True)
