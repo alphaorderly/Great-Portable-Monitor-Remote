@@ -1,0 +1,21 @@
+.tools/
+.venv-gui/
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv*/
+build/
+dist/
+release/
+*.spec
+# Local Bluetooth captures may contain host identifiers; keep them on disk.
+docs/logs/
+
+# Preserve historical pairing/capture notes locally; publish current guides only.
+docs/*
+!docs/FIRMWARE.md
+!docs/WINDOWS_COMPATIBILITY.md
+!docs/RELEASING.md

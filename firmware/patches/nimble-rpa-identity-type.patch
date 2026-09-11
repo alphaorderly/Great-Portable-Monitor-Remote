@@ -1,0 +1,12 @@
+--- a/nimble/host/src/ble_hs_resolv.c
++++ b/nimble/host/src/ble_hs_resolv.c
+@@ -1078,7 +1078,8 @@
+     for (i = 1; i < g_ble_hs_resolv_data.rl_cnt; ++i) {
+         if(ble_hs_resolv_rpa(addr, rl->rl_peer_irk) == 0) {
+             memcpy(g_ble_hs_resolv_list[i].rl_peer_rpa, addr, BLE_DEV_ADDR_LEN);
+-            g_ble_hs_resolv_list[i].rl_addr_type = addr_type;
++            /* rl_addr_type belongs to the stored identity, not the RPA.
++             * Replacing PUBLIC with RANDOM makes bonded LTK lookup fail. */
+             return rl;
+         }
+ 
