@@ -1,6 +1,15 @@
 /* Actual peripheral callbacks with a fake transport; no radio/OS claims. */
 #include <assert.h>
 #include <stdio.h>
+#define TAG input_tag
+#include "../../main/hid_input.c"
+#undef TAG
+#define TAG service_tag
+#include "../../main/hid_service.c"
+#undef TAG
+#define TAG link_tag
+#include "../../main/host_link.c"
+#undef TAG
 #include "../../main/mac_hid.c"
 
 static struct { uint16_t handle; uint8_t data[12]; unsigned len; } sent[256];
@@ -111,7 +120,7 @@ static void descriptor_check(void)
 
 static void mouse_flow_check(void)
 {
-    mac_conn=7; encrypted=true; suspended=false; subscribed=false;
+    link.conn=7; link.encrypted=true; suspended=false; subscribed=false;
     for(unsigned i=0;i<3;++i) { native[i].subscribed=true; native[i].dirty=false; }
     mouse_count=0; memset(native[1].data,0,8); sent_count=0;
     uint8_t motion[4]={0,3,0xfe,0};
@@ -169,7 +178,7 @@ static void bond_recovery_check(void)
         .conn_handle=7,.cur_key_size=16,.new_key_size=16,.new_bonding=1}};
     mac_gap_event(&connect,NULL);
     saved_peer=(ble_addr_t){.val={42}}; saved_mac=saved_schema=true;
-    /* Healthy encrypted links and unrelated handles never lose their bond. */
+    /* Healthy link.encrypted links and unrelated handles never lose their bond. */
     assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
     peer_encrypted=false;
     repair.repeat_pairing.conn_handle=8;
@@ -192,24 +201,24 @@ static void bond_recovery_check(void)
     assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==1);
     assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==1);
     mac_gap_event(&connect,NULL);
-    delete_error=0; saved_mac=saved_schema=true; have_mac_identity=true; mac_identity=saved_peer;
+    delete_error=0; saved_mac=saved_schema=true; link.have_identity=true; link.identity=saved_peer;
     assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_RETRY && deleted_peers==2);
-    assert(!saved_mac && !saved_schema && !have_mac_identity);
+    assert(!saved_mac && !saved_schema && !link.have_identity);
     assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==2);
     /* Freshly bonded Mac saves its identity again; next boot can target it. */
     peer_encrypted=true;
     struct ble_gap_event secured={.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=7}};
     mac_gap_event(&secured,NULL);
-    assert(encrypted && saved_mac && have_mac_identity);
+    assert(link.encrypted && saved_mac && link.have_identity);
     assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==2);
     unsigned old_terminated=terminated;
     secured.enc_change.conn_handle=8; secured.enc_change.status=1;
-    mac_gap_event(&secured,NULL); assert(terminated==old_terminated && encrypted);
+    mac_gap_event(&secured,NULL); assert(terminated==old_terminated && link.encrypted);
     secured.enc_change.conn_handle=7;
-    mac_gap_event(&secured,NULL); assert(!encrypted && terminated==old_terminated+1 && deleted_peers==2);
+    mac_gap_event(&secured,NULL); assert(!link.encrypted && terminated==old_terminated+1 && deleted_peers==2);
     /* A missing persisted LTK must not be reported as a usable bonded link. */
     secured.enc_change.status=0; bond_present=false;
-    mac_gap_event(&secured,NULL); assert(!encrypted && terminated==old_terminated+2);
+    mac_gap_event(&secured,NULL); assert(!link.encrypted && terminated==old_terminated+2);
     bond_present=true;
     struct ble_gap_event disconnect={.type=BLE_GAP_EVENT_DISCONNECT};
     mac_gap_event(&disconnect,NULL); assert(adv_delay==1000);
@@ -256,7 +265,7 @@ static void mode_mapping_check(void)
 
 static void mouse_settings_check(void)
 {
-    mac_conn=7; encrypted=true; suspended=false; subscribed=false;
+    link.conn=7; link.encrypted=true; suspended=false; subscribed=false;
     for(unsigned i=0;i<3;++i) { native[i].subscribed=true; }
     mac_hid_remote_ready(false); mac_hid_sensor_mode(true); sent_count=0;
     uint8_t config[KEYMAP_LENGTH], key[8]={0}, motion[4]={0,1,0xff,1};
@@ -362,7 +371,7 @@ int main(void)
     on_heartbeat(NULL); assert(sent_count==before+1 && !memcmp(sent[before].data,"\0\0\0\0",4));
     key[2]=0x76; mac_hid_keyboard(key); assert(native[0].data[0]==8);
     event=(struct ble_gap_event){.type=BLE_GAP_EVENT_DISCONNECT}; mac_gap_event(&event,NULL);
-    assert(mac_conn==BLE_HS_CONN_HANDLE_NONE && !native[0].data[0] && !native[0].subscribed);
+    assert(link.conn==BLE_HS_CONN_HANDLE_NONE && !native[0].data[0] && !native[0].subscribed);
     /* Reboot-like start targets the saved Mac, then alternates open windows. */
     assert(mac_hid_advertise(0)==0 && adv_mode==BLE_GAP_CONN_MODE_DIR && adv_duration==10000);
     unsigned ads=adv_calls;
@@ -383,14 +392,14 @@ int main(void)
     buffer=(struct os_mbuf){configuration,KEYMAP_LENGTH};
     struct ble_gatt_access_ctxt write={.op=BLE_GATT_ACCESS_OP_WRITE_CHR,.om=&buffer};
     assert(access_keymap(6,0,&write,NULL)==BLE_ATT_ERR_INSUFFICIENT_AUTHEN);
-    encrypted=false; assert(access_keymap(7,0,&write,NULL)==BLE_ATT_ERR_INSUFFICIENT_AUTHEN);
-    encrypted=true;
+    link.encrypted=false; assert(access_keymap(7,0,&write,NULL)==BLE_ATT_ERR_INSUFFICIENT_AUTHEN);
+    link.encrypted=true;
     native[0].data[0]=8; native[0].data[2]=0x2b;
     assert(access_keymap(7,0,&write,NULL)==0 && !native[0].data[0] && !native[0].data[2]);
     buffer=(struct os_mbuf){buffer_data,0};
     struct ble_gatt_access_ctxt read={.op=BLE_GATT_ACCESS_OP_READ_CHR,.om=&buffer};
     assert(access_keymap(7,0,&read,NULL)==0 && buffer.len==64 && buffer.data[4]==1 && buffer.data[8]==0x84);
-    mac_hid_on_reset(); assert(!advertising_ready && !encrypted && mac_conn==BLE_HS_CONN_HANDLE_NONE);
+    mac_hid_on_reset(); assert(!advertising_ready && !link.encrypted && link.conn==BLE_HS_CONN_HANDLE_NONE);
     mode_mapping_check();
     mouse_flow_check();
     mouse_settings_check();
