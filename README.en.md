@@ -50,7 +50,8 @@ The app interface is in Korean.
 - These features require both the updated app and firmware. Existing settings migrate at 1× speed, and cursor-mode Home becomes reserved for pausing movement.
 - The cursor button switches modes and cannot be reassigned.
 - Input debugging shows remote button presses. On Windows, keyboard and mouse output sent to the computer may not appear in the log.
-- **BLE pairing, saving settings and sleep/resume on Windows have not yet been tested on hardware.** See the [Windows compatibility review](docs/WINDOWS_COMPATIBILITY.md) for details.
+- The mapper reconnects to the selected device after transport errors and never automatically repeats a settings write.
+- **The new connection recovery changes still require macOS and Windows hardware validation. Windows BLE settings writes also remain unverified.** See the [Windows compatibility review](docs/WINDOWS_COMPATIBILITY.md) for details.
 
 ## Running from source
 
