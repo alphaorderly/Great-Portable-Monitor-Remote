@@ -14,6 +14,7 @@ from mapping import ACTIONS, defaults_for_host, Entry, KEY, Snapshot, SPEED_DEFA
 from platform_support import MODIFIERS, default_host
 from protocol import BUTTONS, DEVICE_NAME, is_bridge
 from worker import HidWorker
+from connection import ConnectionEvent, ConnectionState
 from debug_panel import DebugPanel
 
 STYLE = """
@@ -50,6 +51,9 @@ class KeyMapper(QMainWindow):
         self.resize(1060, 900)
         self.setMinimumSize(960, 720)
         self.connected = False
+        self.connection_state = ConnectionState.DISCONNECTED
+        self.connection_generation = 0
+        self.disconnect_requested = False
         self.busy = False
         self.revision = None
         self.host = default_host(host_platform)
@@ -264,10 +268,11 @@ class KeyMapper(QMainWindow):
         self.edited()
 
     def refresh_enabled(self):
-        self.connect_button.setEnabled(not self.busy and not self.connected and bool(self.devices.currentData()))
-        self.disconnect_button.setEnabled(self.connected and not self.busy)
-        self.devices.setEnabled(not self.busy and not self.connected)
-        self.scan.setEnabled(not self.busy and not self.connected)
+        self.connect_button.setEnabled(not self.busy and not self.connected and self.connection_state != ConnectionState.RETRY_WAIT and bool(self.devices.currentData()))
+        self.disconnect_button.setEnabled(self.connection_state in (
+            ConnectionState.CONNECTING, ConnectionState.READING, ConnectionState.READY, ConnectionState.RETRY_WAIT))
+        self.devices.setEnabled(not self.busy and not self.connected and self.connection_state != ConnectionState.RETRY_WAIT)
+        self.scan.setEnabled(not self.busy and not self.connected and self.connection_state != ConnectionState.RETRY_WAIT)
         self.table.setEnabled(not self.busy)
         self.mapping_mode.setEnabled(not self.busy)
         self.mouse_speed.setEnabled(not self.busy)
@@ -295,26 +300,46 @@ class KeyMapper(QMainWindow):
     def connect_device(self):
         path = self.devices.currentData()
         if path:
+            self.disconnect_requested = False
             self.busy = True
             self.status.setText("ESP32에 연결하고 저장된 매핑을 읽는 중…")
             self.refresh_enabled()
-            self.worker.commands.put(("connect", path))
+            self.worker.request_connect(path)
 
     def disconnect_device(self):
         self.busy = True
         self.refresh_enabled()
-        self.worker.commands.put(("disconnect", None))
+        self.disconnect_requested = True
+        self.worker.request_disconnect()
 
-    def on_connection(self, connected):
-        self.connected = connected
-        self.debug_panel.set_connected(connected)
-        self.revision = None
-        self.busy = connected
-        self.status.setText("저장된 매핑을 읽는 중…" if connected else "연결 해제됨 · 편집 중인 매핑은 화면에 남아 있습니다.")
+    def on_connection(self, event: ConnectionEvent):
+        if event.generation < self.connection_generation:
+            return
+        if self.disconnect_requested and event.state != ConnectionState.DISCONNECTED:
+            return
+        self.connection_generation = event.generation
+        self.connection_state = event.state
+        self.connected = event.state == ConnectionState.READY
+        self.debug_panel.set_connected(self.connected)
+        if not self.connected:
+            self.revision = None
+        if event.state == ConnectionState.DISCONNECTED:
+            self.disconnect_requested = False
+        self.busy = event.state in (ConnectionState.CONNECTING, ConnectionState.READING)
+        self.status.setText(event.reason or {
+            ConnectionState.DISCONNECTED: "연결 해제됨 · 편집 중인 매핑은 화면에 남아 있습니다.",
+            ConnectionState.CONNECTING: "ESP32 HID에 연결하는 중…",
+            ConnectionState.READING: "저장된 매핑을 읽는 중…",
+            ConnectionState.READY: "설정 읽기 완료 · HID 통신 사용 가능",
+            ConnectionState.RETRY_WAIT: "ESP32에 다시 연결하는 중…",
+            ConnectionState.ERROR: "연결 오류 · 기기와 앱·펌웨어 버전을 확인하세요.",
+        }[event.state])
         self.refresh_enabled()
 
     def on_settings(self, snapshot, operation):
-        preserve_draft = operation == "connect" and self.dirty
+        if self.disconnect_requested:
+            return
+        preserve_draft = operation in ("connect", "reconnect", "recover_save") and self.dirty
         self.revision = snapshot.revision
         self.baseline = (snapshot.entries, snapshot.mouse_entries)
         self.baseline_speed = snapshot.mouse_speed
@@ -335,7 +360,7 @@ class KeyMapper(QMainWindow):
     def on_problem(self, message):
         self.busy = False
         self.revision = None  # A failed write can have an unknown outcome; require a fresh read.
-        self.status.setText(f"{message} · 새 펌웨어와 Bluetooth 연결을 확인하고 ‘장치에서 읽기’를 다시 시도하세요.")
+        self.status.setText(f"{message} · 사용 가능한 연결에서 ‘장치에서 읽기’로 설정을 확인하세요.")
         self.refresh_enabled()
 
     def read_device(self):

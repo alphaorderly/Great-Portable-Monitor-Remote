@@ -105,12 +105,17 @@ def save_settings(device, desired):
     if current.revision != desired.revision:
         raise ValueError("장치 설정이 다른 곳에서 변경됐습니다. 장치에서 다시 읽은 뒤 수정하세요.")
     packet = desired.encode()
-    if device.send_feature_report(packet) != len(packet):
-        raise OSError("설정 전송 결과를 확인하지 못했습니다. 장치에서 다시 읽어 확인하세요.")
-    actual = read_settings(device)
-    expected = replace(desired, revision=(desired.revision + 1) & 0xFFFF)
-    if actual != expected:
-        raise OSError("저장 후 읽은 설정이 다릅니다. 저장 성공으로 처리하지 않았습니다.")
+    try:
+        if device.send_feature_report(packet) != len(packet):
+            raise OSError("설정 전송 결과를 확인하지 못했습니다.")
+        actual = read_settings(device)
+        expected = replace(desired, revision=(desired.revision + 1) & 0xFFFF)
+        if actual != expected:
+            raise OSError("저장 후 읽은 설정이 다릅니다.")
+    except (OSError, ValueError) as exc:
+        # The write may have reached the device. Never repeat it automatically.
+        raise OSError(f"저장 결과를 확인할 수 없습니다. 재연결 후 설정을 확인합니다: {exc}") from exc
+
     return actual
 
 

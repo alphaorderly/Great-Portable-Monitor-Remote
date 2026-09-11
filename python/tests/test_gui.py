@@ -7,6 +7,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gui"))
+from connection import ConnectionEvent, ConnectionState
 from protocol import BUTTONS, ButtonState, Report, is_bridge
 
 
@@ -93,7 +94,7 @@ class GuiTests(unittest.TestCase):
             self.assertTrue(all(not box.isEnabled() for box in window.controls[0x6A][1].values()))
             self.assertEqual(window.controls[0x66][0].currentText(), "F16")
             self.assertFalse(window.apply_button.isEnabled())
-            window.on_connection(True)
+            window.on_connection(ConnectionEvent(ConnectionState.READY))
             window.on_settings(Snapshot(7, DEFAULTS), "connect")
             combo, modifiers = window.controls[0x28]
             combo.setCurrentIndex(combo.findData((KEY << 8) | 4))
@@ -128,7 +129,7 @@ class GuiTests(unittest.TestCase):
         from mapping import DEFAULTS, Snapshot, SPEED_DEFAULT
         window = KeyMapper(start_worker=False, host_platform="darwin")
         try:
-            window.on_connection(True)
+            window.on_connection(ConnectionEvent(ConnectionState.READY))
             window.on_settings(Snapshot(9, DEFAULTS, mouse_speed=6), "connect")
             self.assertEqual(window.mouse_speed.value(), 6)
             self.assertEqual(window.speed_label.text(), "1.5배")
@@ -171,11 +172,11 @@ class GuiTests(unittest.TestCase):
         window = KeyMapper(start_worker=False)
         try:
             window.mouse_speed.setValue(12)
-            window.on_connection(True)
+            window.on_connection(ConnectionEvent(ConnectionState.READY))
             window.on_settings(Snapshot(1, DEFAULTS, mouse_speed=2), "connect")
             self.assertEqual(window.mouse_speed.value(), 12)
             self.assertTrue(window.dirty)
-            window.on_connection(False)
+            window.on_connection(ConnectionEvent(ConnectionState.DISCONNECTED))
             self.assertEqual(window.mouse_speed.value(), 12)
             window.on_settings(Snapshot(1, DEFAULTS, mouse_speed=2), "read")
             self.assertEqual(window.mouse_speed.value(), 2)
@@ -192,14 +193,14 @@ class GuiTests(unittest.TestCase):
             combo.setCurrentIndex(combo.findData((KEY << 8) | 5))
             modifiers[8].setChecked(True)
             self.assertTrue(window.dirty)
-            window.on_connection(True)
+            window.on_connection(ConnectionEvent(ConnectionState.READY))
             window.on_settings(Snapshot(2, DEFAULTS), "connect")
             self.assertEqual(window.entries()[0].key, 5)
             self.assertEqual(window.entries()[0].modifiers, 8)
             combo.setCurrentIndex(combo.findData((VOLUME << 8) | 1))
             self.assertEqual(window.entries()[0].modifiers, 0)
             self.assertFalse(modifiers[8].isEnabled())
-            window.on_connection(False)
+            window.on_connection(ConnectionEvent(ConnectionState.DISCONNECTED))
             self.assertEqual(window.entries()[0].kind, VOLUME)
             self.assertFalse(window.apply_button.isEnabled())
             window.on_devices([])
@@ -212,7 +213,7 @@ class GuiTests(unittest.TestCase):
         from mapping import DEFAULTS, MOUSE_DEFAULTS, Snapshot, KEY, MOUSE
         window = KeyMapper(start_worker=False, host_platform="darwin")
         try:
-            window.on_connection(True)
+            window.on_connection(ConnectionEvent(ConnectionState.READY))
             window.on_settings(Snapshot(10, DEFAULTS), "connect")
             normal = window.controls[0x50][0]
             normal.setCurrentIndex(normal.findData((KEY << 8) | 4))
@@ -350,11 +351,11 @@ class DebugTests(unittest.TestCase):
         worker.commands.put(("debug", MODES[1]))
         worker.commands.put(("connect", b"only-bridge"))
         clock = itertools.count()
-        with patch("worker.hid.enumerate", return_value=[{"product_string": "ESP32 Remote Bridge",
+        with patch.object(worker, "enumerate_devices", return_value=[{"product_string": "ESP32 Remote Bridge",
                    "usage_page": 0xFF00, "usage": 1, "path": b"only-bridge"}]), \
-             patch("worker.hid.device", return_value=device), \
-             patch("worker.configure_shared_access"), \
-             patch("worker.time.monotonic", side_effect=lambda: next(clock)*0.2):
+             patch.object(worker.session, "device_factory", return_value=device), \
+             patch("hid_session.configure_shared_access"), \
+             patch.object(worker, "clock", side_effect=lambda: next(clock)*0.2):
             worker.run()
         self.assertEqual(device.path, b"only-bridge")
         self.assertTrue(device.closed)

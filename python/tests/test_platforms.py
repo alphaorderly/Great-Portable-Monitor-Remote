@@ -8,6 +8,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gui"))
 from mapping import DEFAULTS, MOUSE_DEFAULTS, Snapshot, defaults_for_host
+from connection import ConnectionEvent, ConnectionState
 from platform_support import MODIFIERS, default_host, debug_note
 
 
@@ -52,7 +53,7 @@ class PlatformTests(unittest.TestCase):
         window = KeyMapper(start_worker=False, host_platform="win32")
         try:
             self.assertEqual(window.entries()[11].modifiers, 4)
-            window.on_connection(True)
+            window.on_connection(ConnectionEvent(ConnectionState.READY))
             window.on_settings(Snapshot(7, DEFAULTS, MOUSE_DEFAULTS), "connect")
             self.assertEqual(window.entries()[11].modifiers, 8)
             self.assertFalse(window.dirty)
