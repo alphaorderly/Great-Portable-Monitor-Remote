@@ -1,10 +1,11 @@
-"""Version 2 of the ESP32 keymap Feature Report (ID 5)."""
+"""Version 3 of the ESP32 keymap Feature Report (ID 5)."""
 from dataclasses import dataclass, replace
 from protocol import BUTTONS
 
 REPORT_ID = 5
 PAYLOAD_LENGTH = 64
 NONE, KEY, VOLUME, MOUSE = 0, 1, 2, 3
+SPEED_DEFAULT, SPEED_MAX = 4, 12  # Quarter-speed units: 0.25x through 3x.
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,8 @@ DEFAULTS = tuple(
 )
 
 
-MOUSE_DEFAULTS = tuple(Entry(e.button, MOUSE, 2 if e.button == 0x50 else 1)
+MOUSE_DEFAULTS = tuple(Entry(e.button, NONE, 0) if e.button == 0x4A else
+                       Entry(e.button, MOUSE, 2 if e.button == 0x50 else 1)
                        if e.button in (0x50, 0x28) else e for e in DEFAULTS)
 
 
@@ -44,12 +46,15 @@ class Snapshot:
     revision: int
     entries: tuple[Entry, ...]
     mouse_entries: tuple[Entry, ...] = MOUSE_DEFAULTS
+    mouse_speed: int = SPEED_DEFAULT
 
     def encode(self, with_id=True):
         if not 0 <= self.revision <= 0xFFFF:
             raise ValueError("설정 버전이 올바르지 않습니다.")
-        data = bytearray(b"KM\x02\x0e" + self.revision.to_bytes(2, "little") + b"\x02\0")
-        for entries in (self.entries, self.mouse_entries):
+        if not isinstance(self.mouse_speed, int) or not 1 <= self.mouse_speed <= SPEED_MAX:
+            raise ValueError("마우스 속도는 0.25배부터 3배까지 설정할 수 있습니다.")
+        data = bytearray(b"KM\x03\x0e" + self.revision.to_bytes(2, "little") + bytes([2, self.mouse_speed]))
+        for mode, entries in enumerate((self.entries, self.mouse_entries)):
             if len(entries) != len(BUTTONS):
                 raise ValueError("버튼 수가 올바르지 않습니다.")
             for button, entry in zip(BUTTONS, entries):
@@ -61,7 +66,7 @@ class Snapshot:
                     or (entry.kind == VOLUME and entry.key in (1, 2) and entry.modifiers == 0)
                     or (entry.kind == MOUSE and entry.key in (1, 2, 4) and entry.modifiers == 0)
                 )
-                if not valid or (button == 0x6A and entry.kind != NONE):
+                if not valid or ((button == 0x6A or (mode == 1 and button == 0x4A)) and entry.kind != NONE):
                     raise ValueError(f"{BUTTONS[button]}의 키 매핑이 지원 범위를 벗어났습니다.")
                 value = entry.key | (entry.kind << 7) | (entry.modifiers << 9)
                 data.extend(value.to_bytes(2, "little"))
@@ -74,8 +79,8 @@ class Snapshot:
             if raw[0] != REPORT_ID:
                 raise ValueError("키 매핑 Feature Report가 아닙니다.")
             raw = raw[1:]
-        if len(raw) != PAYLOAD_LENGTH or raw[:4] != b"KM\x02\x0e" or raw[6:8] != b"\x02\0":
-            raise ValueError("모드별 키 매핑을 지원하는 새 ESP32 펌웨어가 필요합니다.")
+        if len(raw) != PAYLOAD_LENGTH or raw[:4] != b"KM\x03\x0e" or raw[6] != 2:
+            raise ValueError("마우스 속도와 홈 버튼 일시 정지를 지원하는 새 ESP32 펌웨어가 필요합니다.")
         modes = []
         for mode in range(2):
             entries = []
@@ -86,7 +91,7 @@ class Snapshot:
                     raise ValueError("키 매핑 예약 비트가 올바르지 않습니다.")
                 entries.append(Entry(button, (value >> 7) & 3, value & 127, (value >> 9) & 15))
             modes.append(tuple(entries))
-        snapshot = cls(int.from_bytes(raw[4:6], "little"), *modes)
+        snapshot = cls(int.from_bytes(raw[4:6], "little"), *modes, mouse_speed=raw[7])
         snapshot.encode()
         return snapshot
 

@@ -45,6 +45,9 @@ The app interface is in Korean.
 ## Features and limitations
 
 - Assign arrows, letters, digits, symbols, F1–F24, navigation keys, volume, three mouse buttons and keyboard modifiers.
+- In cursor mode, use the mouse speed slider to select 0.25–3× (default 1×), then save it to the ESP32.
+- Hold Home in cursor mode to freeze the pointer while repositioning your hand. Movement during the hold is discarded; releasing Home resumes from the current pointer position. Normal-mode Home mappings remain available.
+- These features require both the updated app and firmware. Existing settings migrate at 1× speed, and cursor-mode Home becomes reserved for pausing movement.
 - The cursor button switches modes and cannot be reassigned.
 - Input debugging shows remote button presses. On Windows, keyboard and mouse output sent to the computer may not appear in the log.
 - **BLE pairing, saving settings and sleep/resume on Windows have not yet been tested on hardware.** See the [Windows compatibility review](docs/WINDOWS_COMPATIBILITY.md) for details.

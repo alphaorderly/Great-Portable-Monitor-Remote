@@ -55,6 +55,8 @@ static uint16_t sequence;
 static uint8_t mac_own_addr_type;
 static bool subscribed, encrypted, suspended, remote_ready;
 static bool cursor_mode, mode_known;
+static bool home_held;
+static int motion_remainder[2];
 static uint8_t remote_keys[8], remote_mouse_buttons;
 static struct ble_npl_callout heartbeat;
 static struct ble_npl_callout mouse_timer;
@@ -148,6 +150,7 @@ static void flush_native(void)
 static void clear_native(void)
 {
     mouse_count = 0;
+    memset(motion_remainder, 0, sizeof(motion_remainder));
     for (unsigned i = 0; i < 3; ++i) {
         memset(native[i].data, 0, sizeof(native[i].data));
         native[i].dirty = true;
@@ -197,6 +200,7 @@ void mac_hid_remote_ready(bool ready)
     remote_ready = ready;
     if (!ready) {
         cursor_mode = mode_known = false;
+        home_held = false;
         memset(remote_keys, 0, sizeof(remote_keys)); remote_mouse_buttons = 0;
         memset(report + 4, 0, 8); clear_native(); flush_native();
     }
@@ -231,7 +235,7 @@ static void map_remote(const uint8_t *motion)
 {
     uint8_t mapped[8], consumer, mouse[4] = {0};
     input_map(remote_keys, cursor_mode ? 1 : 0, remote_mouse_buttons, mapped, &consumer, &mouse[0]);
-    if (motion) { memcpy(mouse + 1, motion + 1, 3); }
+    if (motion && !(cursor_mode && home_held)) { memcpy(mouse + 1, motion + 1, 3); }
     update_native(&native[0], mapped);
     update_native(&native[2], &consumer);
     mac_hid_mouse(mouse);
@@ -244,6 +248,16 @@ void mac_hid_keyboard(const uint8_t keyboard[8])
     memcpy(report + 4, keyboard, 8);
     publish(true);
     memcpy(remote_keys, keyboard, sizeof(remote_keys));
+    home_held = false;
+    for (unsigned i = 2; i < 8; ++i) { home_held |= keyboard[i] == 0x4a; }
+    if (cursor_mode && home_held) {
+        /* Remove unsent movement too, while preserving queued click transitions.
+         * Never replay movement or fractional deltas after HOME is released. */
+        for (unsigned i = 0; i < mouse_count; ++i) {
+            memset(mouse_queue[i].axis, 0, sizeof(mouse_queue[i].axis));
+        }
+        memset(motion_remainder, 0, sizeof(motion_remainder));
+    }
     map_remote(NULL);
 }
 
@@ -267,6 +281,7 @@ void mac_hid_mouse(const uint8_t mouse[4])
     r->data[0] = mouse[0];
     if (mac_conn == BLE_HS_CONN_HANDLE_NONE || !r->subscribed || !encrypted || suspended) {
         mouse_count = 0;
+        memset(motion_remainder, 0, sizeof(motion_remainder));
         r->dirty |= changed;
         return;
     }
@@ -282,10 +297,19 @@ void mac_hid_mouse(const uint8_t mouse[4])
     }
     mouse_pending_t *p = &mouse_queue[mouse_count - 1];
     for (unsigned i = 0; i < 3; ++i) {
-        int value = p->axis[i] + (int8_t)mouse[i + 1];
-        /* At most two reports of movement per entry; no unbounded stale motion. */
-        if (value > 254) { value = 254; ++mouse_dropped; }
-        if (value < -254) { value = -254; ++mouse_dropped; }
+        int delta = (int8_t)mouse[i + 1];
+        int limit = 254;
+        if (i < 2) {
+            int scaled = delta * keymap_mouse_speed() + motion_remainder[i];
+            delta = scaled / KEYMAP_SPEED_DEFAULT;
+            motion_remainder[i] = scaled % KEYMAP_SPEED_DEFAULT;
+            /* Two maximum source deltas, split into valid HID reports by the timer. */
+            int scaled_limit = 254 * keymap_mouse_speed() / KEYMAP_SPEED_DEFAULT;
+            if (scaled_limit > limit) { limit = scaled_limit; }
+        }
+        int value = p->axis[i] + delta;
+        if (value > limit) { value = limit; ++mouse_dropped; }
+        if (value < -limit) { value = -limit; ++mouse_dropped; }
         p->axis[i] = value;
     }
     r->dirty = true;

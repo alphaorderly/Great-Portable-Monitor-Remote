@@ -254,6 +254,76 @@ static void mode_mapping_check(void)
     puts("PASS: captured sensor restart preserves cursor mapping, explicit mode switch releases, dual-source clicks, reconnect mode recovery");
 }
 
+static void mouse_settings_check(void)
+{
+    mac_conn=7; encrypted=true; suspended=false; subscribed=false;
+    for(unsigned i=0;i<3;++i) { native[i].subscribed=true; }
+    mac_hid_remote_ready(false); mac_hid_sensor_mode(true); sent_count=0;
+    uint8_t config[KEYMAP_LENGTH], key[8]={0}, motion[4]={0,1,0xff,1};
+    /* Every slider value preserves signed fractional motion and leaves wheel speed unchanged. */
+    for(unsigned speed=1;speed<=KEYMAP_SPEED_MAX;++speed) {
+        keymap_read(config); config[7]=speed; assert(keymap_apply(config,sizeof(config))==KEYMAP_OK);
+        clear_native(); flush_native(); sent_count=0;
+        for(unsigned n=0;n<4;++n) { mac_hid_remote_mouse(motion); on_mouse_tick(NULL); }
+        int x=0,y=0,wheel=0;
+        for(unsigned n=0;n<sent_count;++n) {
+            assert(sent[n].handle==native[1].handle);
+            x+=(int8_t)sent[n].data[1]; y+=(int8_t)sent[n].data[2]; wheel+=(int8_t)sent[n].data[3];
+        }
+        assert(x==(int)speed && y==-(int)speed && wheel==4);
+    }
+    /* Maximum speed must split large deltas without signed-byte overflow or clipping. */
+    clear_native(); flush_native(); sent_count=0;
+    motion[1]=127; motion[2]=(uint8_t)-127; motion[3]=0;
+    mac_hid_remote_mouse(motion);
+    while(mouse_count) { on_mouse_tick(NULL); }
+    assert(sent_count==3);
+    for(unsigned n=0;n<3;++n) { assert((int8_t)sent[n].data[1]==127 && (int8_t)sent[n].data[2]==-127); }
+
+    /* HOME cancels pending motion immediately, including fractions, even under backpressure. */
+    keymap_read(config); config[7]=1; assert(keymap_apply(config,sizeof(config))==KEYMAP_OK);
+    clear_native(); flush_native(); sent_count=0;
+    motion[1]=7; motion[2]=(uint8_t)-7;
+    mac_hid_remote_mouse(motion); /* Queued +/-1 and fractional +/-3 quarters. */
+    key[7]=0x4a; mac_hid_keyboard(key);
+    assert(home_held && !native[0].data[2] && !native[2].data[0]);
+    mbuf_used=HID_MBUF_MAX_USED;
+    for(unsigned n=0;n<1000;++n) { mac_hid_remote_mouse(motion); }
+    mac_hid_sensor_mode(false); mac_hid_sensor_mode(true); /* Automatic sensor pause/restart. */
+    assert(cursor_mode && home_held);
+    mbuf_used=0;
+    while(mouse_count) { on_mouse_tick(NULL); }
+    for(unsigned n=0;n<sent_count;++n) {
+        assert(sent[n].handle==native[1].handle && !sent[n].data[1] && !sent[n].data[2] && !sent[n].data[3]);
+    }
+    /* Click press and release remain usable while the cursor is frozen. */
+    sent_count=0; motion[0]=1; mac_hid_remote_mouse(motion); on_mouse_tick(NULL);
+    motion[0]=0; mac_hid_remote_mouse(motion); on_mouse_tick(NULL);
+    assert(sent_count==2 && sent[0].data[0]==1 && !sent[1].data[0]);
+    assert(!sent[0].data[1] && !sent[0].data[2] && !sent[1].data[1] && !sent[1].data[2]);
+    key[7]=0; mac_hid_keyboard(key); sent_count=0;
+    on_mouse_tick(NULL); on_heartbeat(NULL); assert(!sent_count);
+    motion[1]=1; motion[2]=(uint8_t)-1;
+    int x=0,y=0;
+    for(unsigned n=0;n<4;++n) {
+        mac_hid_remote_mouse(motion); on_mouse_tick(NULL);
+        assert((int8_t)sent[n].data[1]==(n==3?1:0));
+        x+=(int8_t)sent[n].data[1]; y+=(int8_t)sent[n].data[2];
+    }
+    assert(x==1 && y==-1); /* No contribution from repositioning or previous fractions. */
+
+    /* HOME already held before the first sensor packet also freezes recovery into mouse mode. */
+    mac_hid_remote_ready(false); key[7]=0x4a; mac_hid_keyboard(key);
+    assert(native[0].data[2]==0x4a); /* Normal mode retains HOME. */
+    mac_hid_remote_mouse(motion); assert(cursor_mode && home_held && !native[0].data[2]);
+    assert(!mouse_count);
+    mac_hid_remote_ready(false); assert(!home_held);
+    keymap_read(config); config[7]=KEYMAP_SPEED_DEFAULT; assert(keymap_apply(config,sizeof(config))==KEYMAP_OK);
+    mac_hid_remote_mouse(motion); assert(cursor_mode && mouse_count);
+    mac_hid_remote_ready(false);
+    puts("PASS: all mouse speeds, signed subpixel accumulation, large deltas, HOME pause/discard/resume, click preservation and mode recovery");
+}
+
 int main(void)
 {
     keymap_init();
@@ -323,6 +393,7 @@ int main(void)
     mac_hid_on_reset(); assert(!advertising_ready && !encrypted && mac_conn==BLE_HS_CONN_HANDLE_NONE);
     mode_mapping_check();
     mouse_flow_check();
+    mouse_settings_check();
     bond_recovery_check();
     puts("PASS: bounded mouse queue, pressure/allocation recovery, click order; GATT report sizes/references, security/subscription gates, relative motion once, lost release retry, disconnect release");
 }

@@ -122,6 +122,67 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_mouse_speed_save_read_defaults_and_reserved_home(self):
+        from dataclasses import replace
+        from app import KeyMapper
+        from mapping import DEFAULTS, Snapshot, SPEED_DEFAULT
+        window = KeyMapper(start_worker=False, host_platform="darwin")
+        try:
+            window.on_connection(True)
+            window.on_settings(Snapshot(9, DEFAULTS, mouse_speed=6), "connect")
+            self.assertEqual(window.mouse_speed.value(), 6)
+            self.assertEqual(window.speed_label.text(), "1.5배")
+            self.assertFalse(window.dirty)
+            window.mapping_mode.setCurrentIndex(1)
+            self.assertFalse(window.mouse_settings.isHidden())
+            combo, checks = window.controls[0x4A]
+            self.assertFalse(combo.isEnabled())
+            self.assertIn("커서 정지", combo.currentText())
+            self.assertTrue(all(not box.isEnabled() for box in checks.values()))
+            self.assertEqual(window.entries()[10].kind, 0)
+            window.mouse_speed.setValue(1)
+            self.assertEqual(window.speed_label.text(), "0.25배")
+            self.assertTrue(window.dirty)
+            window.mapping_mode.setCurrentIndex(0)
+            self.assertTrue(combo.isEnabled())
+            self.assertEqual(window.entries()[10].key, 0x4A)
+            window.load_defaults()  # Normal defaults do not reset mouse speed.
+            self.assertEqual(window.mouse_speed.value(), 1)
+            window.apply_settings()
+            command, snapshot = window.worker.commands.get_nowait()
+            self.assertEqual(command, "apply")
+            self.assertEqual(snapshot.mouse_speed, 1)
+            self.assertFalse(window.mouse_speed.isEnabled())
+            window.on_settings(replace(snapshot, revision=10), "apply")
+            self.assertFalse(window.dirty)
+            window.mapping_mode.setCurrentIndex(1)
+            window.load_defaults()
+            self.assertEqual(window.mouse_speed.value(), SPEED_DEFAULT)
+            self.assertTrue(window.dirty)
+            window.on_settings(replace(snapshot, revision=10), "read")
+            self.assertEqual(window.mouse_speed.value(), 1)
+            self.assertFalse(window.dirty)
+        finally:
+            window.close()
+
+    def test_mouse_speed_offline_draft_survives_connection(self):
+        from app import KeyMapper
+        from mapping import DEFAULTS, Snapshot
+        window = KeyMapper(start_worker=False)
+        try:
+            window.mouse_speed.setValue(12)
+            window.on_connection(True)
+            window.on_settings(Snapshot(1, DEFAULTS, mouse_speed=2), "connect")
+            self.assertEqual(window.mouse_speed.value(), 12)
+            self.assertTrue(window.dirty)
+            window.on_connection(False)
+            self.assertEqual(window.mouse_speed.value(), 12)
+            window.on_settings(Snapshot(1, DEFAULTS, mouse_speed=2), "read")
+            self.assertEqual(window.mouse_speed.value(), 2)
+            self.assertFalse(window.dirty)
+        finally:
+            window.close()
+
     def test_offline_draft_survives_connect_and_media_disables_modifiers(self):
         from app import KeyMapper
         from mapping import DEFAULTS, Snapshot, KEY, VOLUME
@@ -304,6 +365,23 @@ class DebugTests(unittest.TestCase):
 
 
 class MappingTests(unittest.TestCase):
+    def test_speed_roundtrip_validation_and_old_firmware_rejected(self):
+        from dataclasses import replace
+        from mapping import DEFAULTS, Snapshot, Entry, KEY
+        for speed in range(1, 13):
+            snapshot = Snapshot(5, DEFAULTS, mouse_speed=speed)
+            self.assertEqual(Snapshot.decode(snapshot.encode()), snapshot)
+        for speed in (0, 13, 255, -1, 1.5):
+            with self.subTest(speed=speed), self.assertRaises(ValueError):
+                Snapshot(0, DEFAULTS, mouse_speed=speed).encode()
+        snapshot = Snapshot(0, DEFAULTS)
+        bad_home = (*snapshot.mouse_entries[:10], Entry(0x4A, KEY, 4), *snapshot.mouse_entries[11:])
+        with self.assertRaises(ValueError):
+            replace(snapshot, mouse_entries=bad_home).encode()
+        old = bytes.fromhex((Path(__file__).resolve().parents[2] / "shared/fixtures/keymap-v2-default.hex").read_text())
+        with self.assertRaisesRegex(ValueError, "새 ESP32 펌웨어"):
+            Snapshot.decode(old)
+
     def test_protocol_roundtrip_and_shared_c_defaults(self):
         from mapping import DEFAULTS, Snapshot
         snapshot = Snapshot(0, DEFAULTS)
@@ -346,8 +424,8 @@ class MappingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             save_settings(device, Snapshot(2, entries))
         self.assertEqual(device.writes, 0)
-        saved = save_settings(device, Snapshot(3, entries))
-        self.assertEqual(saved, Snapshot(4, entries))
+        saved = save_settings(device, Snapshot(3, entries, mouse_speed=7))
+        self.assertEqual(saved, Snapshot(4, entries, mouse_speed=7))
         self.assertEqual(device.asserted, (REPORT_ID, 65))
         device.bad_readback = True
         with self.assertRaises(OSError):

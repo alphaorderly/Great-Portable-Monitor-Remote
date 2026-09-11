@@ -8,9 +8,9 @@ import hid
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel,
-    QMainWindow, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QTabWidget,
+    QMainWindow, QPushButton, QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QTabWidget,
 )
-from mapping import ACTIONS, defaults_for_host, Entry, KEY, Snapshot
+from mapping import ACTIONS, defaults_for_host, Entry, KEY, Snapshot, SPEED_DEFAULT, SPEED_MAX
 from platform_support import MODIFIERS, default_host
 from protocol import BUTTONS, DEVICE_NAME, is_bridge
 from worker import HidWorker
@@ -54,6 +54,7 @@ class KeyMapper(QMainWindow):
         self.revision = None
         self.host = default_host(host_platform)
         self.baseline = defaults_for_host(self.host)
+        self.baseline_speed = SPEED_DEFAULT
         self.drafts = list(self.baseline)
         self.edit_mode = 0
         self.dirty = False
@@ -110,6 +111,28 @@ class KeyMapper(QMainWindow):
         self.host_preset.setToolTip("‘현재 모드 기본값’을 누를 때만 사용합니다. 저장된 매핑은 자동 변환하지 않습니다.")
         mode_row.addWidget(self.host_preset)
         layout.addLayout(mode_row)
+
+        self.mouse_settings = QWidget()
+        speed_layout = QVBoxLayout(self.mouse_settings)
+        speed_layout.setContentsMargins(4, 0, 4, 0)
+        speed_row = QHBoxLayout()
+        speed_row.addWidget(QLabel("마우스 속도"))
+        speed_row.addWidget(QLabel("느리게"))
+        self.mouse_speed = QSlider(Qt.Orientation.Horizontal)
+        self.mouse_speed.setRange(1, SPEED_MAX)
+        self.mouse_speed.setValue(SPEED_DEFAULT)
+        self.mouse_speed.setAccessibleName("마우스 속도")
+        self.mouse_speed.setToolTip("0.25배~3배 · 기본 1배 · ESP32에 적용·저장을 누르면 반영됩니다.")
+        speed_row.addWidget(self.mouse_speed, 1)
+        speed_row.addWidget(QLabel("빠르게"))
+        self.speed_label = QLabel("1배")
+        self.speed_label.setMinimumWidth(52)
+        speed_row.addWidget(self.speed_label)
+        speed_layout.addLayout(speed_row)
+        speed_layout.addWidget(label("홈 버튼은 손 위치 조정 전용입니다. 누르는 동안 커서가 멈추며, 그동안의 움직임은 버립니다.", "muted"))
+        self.mouse_speed.valueChanged.connect(self.speed_changed)
+        self.mouse_settings.setVisible(False)
+        layout.addWidget(self.mouse_settings)
 
         self.table = QTableWidget(len(BUTTONS), 6)
         self.table.setHorizontalHeaderLabels(["리모컨 버튼", "할당할 동작", *[name for _, name in MODIFIERS]])
@@ -193,6 +216,7 @@ class KeyMapper(QMainWindow):
     def switch_mapping_mode(self, mode):
         self.drafts[self.edit_mode] = self.entries()
         self.edit_mode = mode
+        self.mouse_settings.setVisible(mode == 1)
         self.populate(self.drafts[mode])
         self.edited()
 
@@ -201,15 +225,19 @@ class KeyMapper(QMainWindow):
         try:
             for entry in entries:
                 combo, checks = self.controls[entry.button]
-                value = 0 if entry.button == 0x6A else (entry.kind << 8) | entry.key
+                reserved = entry.button == 0x6A or (self.edit_mode == 1 and entry.button == 0x4A)
+                combo.setEnabled(not reserved)
+                if entry.button == 0x4A:
+                    combo.setItemText(combo.findData(0), "누르는 동안 커서 정지 (키 입력 없음)" if reserved else "동작 없음")
+                value = 0 if reserved else (entry.kind << 8) | entry.key
                 index = combo.findData(value)
                 if index < 0:
                     combo.addItem(f"HID key 0x{entry.key:02X}", value)
                     index = combo.count() - 1
                 combo.setCurrentIndex(index)
                 for bit, box in checks.items():
-                    box.setChecked(entry.button != 0x6A and bool(entry.modifiers & bit))
-                    box.setEnabled(entry.button != 0x6A and entry.kind == KEY)
+                    box.setChecked(not reserved and bool(entry.modifiers & bit))
+                    box.setEnabled(not reserved and entry.kind == KEY)
         finally:
             self.loading = False
 
@@ -227,9 +255,13 @@ class KeyMapper(QMainWindow):
     def edited(self, *args):
         if self.loading:
             return
-        self.dirty = self.profiles() != self.baseline
+        self.dirty = self.profiles() != self.baseline or self.mouse_speed.value() != self.baseline_speed
         self.change_label.setText("저장하지 않은 변경 있음" if self.dirty else "변경 없음")
         self.refresh_enabled()
+
+    def speed_changed(self, value):
+        self.speed_label.setText(f"{value / SPEED_DEFAULT:g}배")
+        self.edited()
 
     def refresh_enabled(self):
         self.connect_button.setEnabled(not self.busy and not self.connected and bool(self.devices.currentData()))
@@ -238,6 +270,7 @@ class KeyMapper(QMainWindow):
         self.scan.setEnabled(not self.busy and not self.connected)
         self.table.setEnabled(not self.busy)
         self.mapping_mode.setEnabled(not self.busy)
+        self.mouse_speed.setEnabled(not self.busy)
         self.host_preset.setEnabled(not self.busy)
         self.defaults_button.setEnabled(not self.busy)
         self.read_button.setEnabled(self.connected and not self.busy)
@@ -284,9 +317,13 @@ class KeyMapper(QMainWindow):
         preserve_draft = operation == "connect" and self.dirty
         self.revision = snapshot.revision
         self.baseline = (snapshot.entries, snapshot.mouse_entries)
+        self.baseline_speed = snapshot.mouse_speed
         if not preserve_draft:
             self.drafts = list(self.baseline)
             self.populate(self.drafts[self.edit_mode])
+            self.loading = True
+            self.mouse_speed.setValue(snapshot.mouse_speed)
+            self.loading = False
         self.busy = False
         self.edited()
         self.status.setText(
@@ -309,13 +346,15 @@ class KeyMapper(QMainWindow):
 
     def load_defaults(self):
         self.populate(defaults_for_host(self.host_preset.currentData())[self.edit_mode])
+        if self.edit_mode == 1:
+            self.mouse_speed.setValue(SPEED_DEFAULT)
         self.edited()
         self.status.setText("기본값을 편집 화면에 불러왔습니다. 장치에 반영하려면 적용·저장을 누르세요.")
 
     def apply_settings(self):
         if self.revision is None:
             return
-        snapshot = Snapshot(self.revision, *self.profiles())
+        snapshot = Snapshot(self.revision, *self.profiles(), mouse_speed=self.mouse_speed.value())
         snapshot.encode()
         self.busy = True
         self.status.setText("ESP32에 매핑 저장 중… 저장 후 장치의 설정을 다시 읽어 확인합니다.")

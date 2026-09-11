@@ -19,7 +19,7 @@ void input_map(const uint8_t remote[8], unsigned mode, uint8_t native_buttons,
         uint8_t button = i < 8 ? remote[i] : (native_buttons & 1 ? 0x28 : 0);
         /* The remote also inserts 6A alongside arrows when restarting its sensor.
          * Never emit a host key for it, including previously saved mappings. */
-        if (button == 0x6a) { continue; }
+        if (button == 0x6a || (mode == 1 && button == 0x4a)) { continue; }
         const keymap_entry_t *entry = keymap_find_mode(button, mode);
         if (!entry || entry->kind == KEYMAP_NONE) { continue; }
         if (entry->kind == KEYMAP_VOLUME) { *consumer |= entry->key; continue; }
