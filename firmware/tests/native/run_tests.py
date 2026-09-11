@@ -11,10 +11,10 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--idf-path", type=Path, default=Path(os.environ.get("IDF_PATH", root.parent / ".tools/esp-idf")))
 args = parser.parse_args()
 with tempfile.TemporaryDirectory(prefix="remote-native-") as tmp:
-    for name in ("hid_client", "mac_hid", "input_codec", "reconnect", "keymap"):
+    for name in ("hid_client", "mac_hid", "input_codec", "reconnect", "keymap", "host_link"):
         binary = Path(tmp) / name
         subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
-                        "-Itests/native/stubs", f"tests/native/{name}_test.c", "main/input_codec.c", "main/keymap.c",
+                        "-Itests/native/stubs", f"tests/native/{name}_test.c", *(["main/host_link.c"] if name == "host_link" else []), "main/input_codec.c", "main/keymap.c",
                         "tests/native/keymap_storage_stub.c", "-o", str(binary)], cwd=root, check=True)
         command = [str(binary)]
         if name == "hid_client":

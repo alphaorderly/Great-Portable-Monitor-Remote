@@ -7,7 +7,8 @@ typedef struct { uint8_t type, val[6]; } ble_addr_t;
 #define BLE_ADDR_RANDOM 1
 #define BLE_ADDR_PUBLIC_ID 2
 #define BLE_ADDR_RANDOM_ID 3
-#define CONFIG_BT_NIMBLE_MAX_BONDS 3
+#define CONFIG_BT_NIMBLE_MAX_BONDS 4
+#define CONFIG_BT_NIMBLE_MAX_CCCDS 16
 #define CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT 12
 int os_msys_count(void);
 int os_msys_num_free(void);
@@ -47,7 +48,7 @@ struct ble_gap_event {
     int type;
     struct { struct os_mbuf *om; uint16_t attr_handle, conn_handle; bool indication; } notify_rx;
     struct { int status; uint16_t conn_handle; } connect, enc_change;
-    struct { uint16_t attr_handle; bool cur_notify; } subscribe;
+    struct { uint16_t attr_handle, conn_handle; bool cur_notify; } subscribe;
     struct { int reason; struct ble_gap_conn_desc conn; } disconnect;
     struct { int reason; } adv_complete, disc_complete;
     struct ble_gap_disc_desc disc;
@@ -55,7 +56,7 @@ struct ble_gap_event {
     struct { struct { unsigned action; } params; uint16_t conn_handle; } passkey;
     struct { const struct ble_gap_upd_params *peer_params; } conn_update_req;
     struct { int status; uint16_t conn_handle; } conn_update;
-    struct { int status; uint16_t attr_handle; bool indication; } notify_tx;
+    struct { int status; uint16_t attr_handle, conn_handle; bool indication; } notify_tx;
     struct ble_gap_repeat_pairing repeat_pairing;
 };
 typedef int ble_gatt_disc_svc_fn(uint16_t,const struct ble_gatt_error *,const struct ble_gatt_svc *,void *);
@@ -143,6 +144,8 @@ int ble_npl_callout_reset(struct ble_npl_callout *,uint32_t);
 void ble_npl_callout_stop(struct ble_npl_callout *);
 int ble_gap_adv_active(void);
 uint32_t ble_npl_time_ms_to_ticks32(uint32_t);
+uint32_t ble_npl_time_ticks_to_ms32(uint32_t);
+uint32_t ble_npl_time_get(void);
 int ble_npl_callout_init(struct ble_npl_callout *,void *,void (*)(struct ble_npl_event *),void *);
 void *nimble_port_get_dflt_eventq(void);
 int ble_gap_security_initiate(uint16_t);
@@ -172,6 +175,7 @@ int ble_store_util_delete_peer(const ble_addr_t *);
 #define BLE_HS_ESTORE_CAP 29
 #define BLE_STORE_OBJ_TYPE_OUR_SEC 1
 #define BLE_STORE_OBJ_TYPE_PEER_SEC 2
+#define BLE_STORE_OBJ_TYPE_CCCD 3
 #define BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP 4
 #define BLE_HCI_ADV_RPT_EVTYPE_ADV_IND 0
 #define BLE_HCI_ADV_RPT_EVTYPE_DIR_IND 1

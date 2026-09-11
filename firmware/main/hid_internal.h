@@ -11,7 +11,13 @@
 #define FLAG_INPUT_EVENT 2
 
 /* All interfaces run on the NimBLE host task. Link state has one owner. */
+typedef enum {
+    HOST_LINK_IDLE, HOST_LINK_WAIT_SECURITY, HOST_LINK_WAIT_SUBSCRIPTIONS,
+    HOST_LINK_PARTIAL, HOST_LINK_READY, HOST_LINK_CLOSING, HOST_LINK_FAULT
+} host_link_phase_t;
 typedef struct {
+    uint32_t generation, connected_at;
+    host_link_phase_t phase;
     uint16_t conn;
     bool encrypted;
     ble_addr_t identity;
@@ -21,6 +27,7 @@ const host_link_context_t *host_link_state(void);
 int host_link_init(void);
 int host_link_advertise(uint8_t own_addr_type);
 void host_link_reset(void);
+void host_link_tick(uint32_t generation, uint32_t now_ms);
 
 typedef struct {
     uint8_t id, length, data[8];

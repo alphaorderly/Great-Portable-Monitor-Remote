@@ -63,9 +63,11 @@ int ble_gatts_notify_custom(uint16_t conn,uint16_t handle,struct os_mbuf *om)
     memcpy(sent[sent_count++].data,om->data,om->len); return 0;
 }
 int ble_npl_callout_reset(struct ble_npl_callout *c,uint32_t n)
-{ if(c==&advertise_retry)adv_delay=n; else assert(n==(c==&mouse_timer?MOUSE_PERIOD_MS:1000)); return 0; }
+{ if(c==&advertise_retry)adv_delay=n; else if(c!=&phase_timer) assert(n==(c==&mouse_timer?MOUSE_PERIOD_MS:1000)); return 0; }
 void ble_npl_callout_stop(struct ble_npl_callout *c) { if(c==&advertise_retry)adv_delay=0; }
 uint32_t ble_npl_time_ms_to_ticks32(uint32_t n) { return n; }
+uint32_t ble_npl_time_ticks_to_ms32(uint32_t n) { return n; }
+uint32_t ble_npl_time_get(void) { return 0; }
 int ble_npl_callout_init(struct ble_npl_callout *c,void *q,void (*fn)(struct ble_npl_event *),void *arg)
 { (void)c; (void)q; (void)fn; (void)arg; return 0; }
 void *nimble_port_get_dflt_eventq(void) { return NULL; }
@@ -85,6 +87,16 @@ int ble_gap_adv_start(uint8_t type,const ble_addr_t *peer,int duration,const str
 { (void)type; (void)cb; (void)arg; ++adv_calls; adv_active=true; adv_mode=p->conn_mode; adv_duration=duration;
   assert((peer!=NULL)==(adv_mode==BLE_GAP_CONN_MODE_DIR)); return 0; }
 
+static int deliver(struct ble_gap_event *event, void *unused)
+{
+    (void)unused;
+    if(event->type==BLE_GAP_EVENT_CONNECT && !event->connect.status && link.conn!=BLE_HS_CONN_HANDLE_NONE) {
+        struct ble_gap_event closed={.type=BLE_GAP_EVENT_DISCONNECT,.disconnect={.conn={.conn_handle=link.conn}}};
+        mac_gap_event(&closed,(void *)(uintptr_t)radio_epoch);
+    }
+    return mac_gap_event(event,(void *)(uintptr_t)radio_epoch);
+}
+
 static void descriptor_check(void)
 {
     /* Walk actual HID items and count input bits for each Report ID. */
@@ -103,6 +115,12 @@ static void descriptor_check(void)
         case 0xc0: assert(collections); --collections; break;
         }
     }
+    unsigned subscriptions=1; /* GATT Service Changed indication, per host. */
+    for(unsigned i=0;services[0].characteristics[i].uuid;++i) {
+        subscriptions += !!(services[0].characteristics[i].flags & BLE_GATT_CHR_F_NOTIFY);
+    }
+    assert(2*subscriptions<=CONFIG_BT_NIMBLE_MAX_CCCDS);
+    assert(CONFIG_BT_NIMBLE_MAX_BONDS>=3); /* remote + Mac + Windows */
     assert(!collections && bits[1]==96 && bits[2]==64 && bits[3]==32 && bits[4]==8);
     assert(!bits[5] && feature_bits[5]==512);
     for(unsigned i=0;i<4;++i) {
@@ -176,53 +194,53 @@ static void bond_recovery_check(void)
     struct ble_gap_event connect={.type=BLE_GAP_EVENT_CONNECT,.connect={.conn_handle=7}};
     struct ble_gap_event repair={.type=BLE_GAP_EVENT_REPEAT_PAIRING,.repeat_pairing={
         .conn_handle=7,.cur_key_size=16,.new_key_size=16,.new_bonding=1}};
-    mac_gap_event(&connect,NULL);
+    deliver(&connect,NULL);
     saved_peer=(ble_addr_t){.val={42}}; saved_mac=saved_schema=true;
     /* Healthy link.encrypted links and unrelated handles never lose their bond. */
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
     peer_encrypted=false;
     repair.repeat_pairing.conn_handle=8;
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
     repair.repeat_pairing.conn_handle=7;
     remote_matches=true;
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
     remote_matches=false;
     repair.repeat_pairing.new_key_size=7;
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
     repair.repeat_pairing.new_key_size=16;
     repair.repeat_pairing.cur_sc=1;
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
     repair.repeat_pairing.cur_sc=0;
     forget_error=true;
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && !deleted_peers);
     forget_error=false;
-    mac_gap_event(&connect,NULL);
+    deliver(&connect,NULL);
     delete_error=1;
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==1);
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==1);
-    mac_gap_event(&connect,NULL);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==1);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==1);
+    deliver(&connect,NULL);
     delete_error=0; saved_mac=saved_schema=true; link.have_identity=true; link.identity=saved_peer;
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_RETRY && deleted_peers==2);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_RETRY && deleted_peers==2);
     assert(!saved_mac && !saved_schema && !link.have_identity);
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==2);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==2);
     /* Freshly bonded Mac saves its identity again; next boot can target it. */
     peer_encrypted=true;
     struct ble_gap_event secured={.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=7}};
-    mac_gap_event(&secured,NULL);
+    deliver(&secured,NULL);
     assert(link.encrypted && saved_mac && link.have_identity);
-    assert(mac_gap_event(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==2);
+    assert(deliver(&repair,NULL)==BLE_GAP_REPEAT_PAIRING_IGNORE && deleted_peers==2);
     unsigned old_terminated=terminated;
     secured.enc_change.conn_handle=8; secured.enc_change.status=1;
-    mac_gap_event(&secured,NULL); assert(terminated==old_terminated && link.encrypted);
+    deliver(&secured,NULL); assert(terminated==old_terminated && link.encrypted);
     secured.enc_change.conn_handle=7;
-    mac_gap_event(&secured,NULL); assert(!link.encrypted && terminated==old_terminated+1 && deleted_peers==2);
+    deliver(&secured,NULL); assert(!link.encrypted && terminated==old_terminated+1 && deleted_peers==2);
     /* A missing persisted LTK must not be reported as a usable bonded link. */
-    secured.enc_change.status=0; bond_present=false;
-    mac_gap_event(&secured,NULL); assert(!link.encrypted && terminated==old_terminated+2);
+    deliver(&connect,NULL); secured.enc_change.status=0; bond_present=false;
+    deliver(&secured,NULL); assert(!link.encrypted && terminated==old_terminated+2);
     bond_present=true;
-    struct ble_gap_event disconnect={.type=BLE_GAP_EVENT_DISCONNECT};
-    mac_gap_event(&disconnect,NULL); assert(adv_delay==1000);
-    adv_active=false; retry_advertising(NULL); assert(adv_mode==BLE_GAP_CONN_MODE_DIR);
+    struct ble_gap_event disconnect={.type=BLE_GAP_EVENT_DISCONNECT,.disconnect={.conn={.conn_handle=7}}};
+    deliver(&disconnect,NULL); assert(adv_delay==1000);
+    adv_active=false; retry_advertising(NULL); assert(adv_mode==BLE_GAP_CONN_MODE_UND);
     assert(!security_requests);
     puts("PASS: Mac stale-bond recovery, remote/healthy-bond protection, no downgrade, storage failure, encryption failure and advertising retry");
 }
@@ -339,17 +357,17 @@ int main(void)
     descriptor_check();
     input_handle=10; for(unsigned i=0;i<3;++i)native[i].handle=20+i;
     struct ble_gap_event event={.type=BLE_GAP_EVENT_CONNECT,.connect={.conn_handle=7}};
-    mac_gap_event(&event,NULL);
+    deliver(&event,NULL);
     assert(!security_requests);
     uint8_t key[8]={0,0,0x50}, mouse[4]={1,0xff,3,0};
     mac_hid_keyboard(key); mac_hid_mouse(mouse); assert(!sent_count);
     for(unsigned i=0;i<3;++i) {
-        event=(struct ble_gap_event){.type=BLE_GAP_EVENT_SUBSCRIBE,.subscribe={.attr_handle=20+i,.cur_notify=true}};
-        mac_gap_event(&event,NULL);
+        event=(struct ble_gap_event){.type=BLE_GAP_EVENT_SUBSCRIBE,.subscribe={.conn_handle=7,.attr_handle=20+i,.cur_notify=true}};
+        deliver(&event,NULL);
     }
     assert(!sent_count); /* Neither keys nor motion may bypass encryption. */
     map_read=true; /* Host has read the expanded Report Map. */
-    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=7}}; mac_gap_event(&event,NULL);
+    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=7}}; deliver(&event,NULL);
     assert(changed_count==0 && sent_count==3 && saved_schema); /* All new Reports already subscribed. */
     assert(sent[0].data[2]==0x50 && sent[1].data[0]==1 && !sent[1].data[1] && !sent[1].data[2]);
     sent_count=0;
@@ -366,26 +384,26 @@ int main(void)
     mac_hid_remote_ready(false);
     assert(sent_count==7 && !sent[6].data[0]);
     unsigned before=sent_count; on_heartbeat(NULL); assert(sent_count==before);
-    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_NOTIFY_TX,.notify_tx={.attr_handle=21,.status=1}};
-    mac_gap_event(&event,NULL); assert(native[1].dirty);
+    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_NOTIFY_TX,.notify_tx={.conn_handle=7,.attr_handle=21,.status=1}};
+    deliver(&event,NULL); assert(native[1].dirty);
     on_heartbeat(NULL); assert(sent_count==before+1 && !memcmp(sent[before].data,"\0\0\0\0",4));
     key[2]=0x76; mac_hid_keyboard(key); assert(native[0].data[0]==8);
-    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_DISCONNECT}; mac_gap_event(&event,NULL);
+    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_DISCONNECT,.disconnect={.conn={.conn_handle=7}}}; deliver(&event,NULL);
     assert(link.conn==BLE_HS_CONN_HANDLE_NONE && !native[0].data[0] && !native[0].subscribed);
-    /* Reboot-like start targets the saved Mac, then alternates open windows. */
-    assert(mac_hid_advertise(0)==0 && adv_mode==BLE_GAP_CONN_MODE_DIR && adv_duration==10000);
+    /* Reboot-like start targets the saved Mac, then keeps open advertising. */
+    assert(mac_hid_advertise(0)==0 && adv_mode==BLE_GAP_CONN_MODE_DIR && adv_duration==3000);
     unsigned ads=adv_calls;
     retry_advertising(NULL); assert(adv_calls==ads);
     adv_active=false;
-    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_ADV_COMPLETE}; mac_gap_event(&event,NULL);
+    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_ADV_COMPLETE}; deliver(&event,NULL);
     assert(adv_delay==50); retry_advertising(NULL);
-    assert(adv_mode==BLE_GAP_CONN_MODE_UND && adv_duration==20000);
-    adv_active=false; mac_gap_event(&event,NULL); retry_advertising(NULL);
-    assert(adv_mode==BLE_GAP_CONN_MODE_DIR);
+    assert(adv_mode==BLE_GAP_CONN_MODE_UND && adv_duration==BLE_HS_FOREVER);
+    adv_active=false; deliver(&event,NULL); retry_advertising(NULL);
+    assert(adv_mode==BLE_GAP_CONN_MODE_UND);
     adv_active=false;
-    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_CONNECT,.connect={.conn_handle=7}}; mac_gap_event(&event,NULL);
+    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_CONNECT,.connect={.conn_handle=7}}; deliver(&event,NULL);
     assert(!adv_delay && !security_requests);
-    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=7}}; mac_gap_event(&event,NULL);
+    event=(struct ble_gap_event){.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=7}}; deliver(&event,NULL);
     assert(changed_count==0); /* Saved schema must not trigger rediscovery every reconnect. */
     uint8_t configuration[KEYMAP_LENGTH]; keymap_read(configuration);
     configuration[8]=0x84; configuration[9]=0x10; /* Command+A, compact v2. */

@@ -144,14 +144,18 @@ static int store_write_logged(int type, const union ble_store_value *value)
             ESP_LOGE(TAG, "bond storage failed; encryption alone is not bonding success");
         }
     }
+    if (type == BLE_STORE_OBJ_TYPE_CCCD && rc != 0) {
+        ESP_LOGE(TAG, "subscription storage failed: status=%d; existing records retained", rc);
+    }
     return rc;
 }
 
 static int store_status(struct ble_store_status_event *event, void *arg)
 {
     (void)arg;
-    bond_store_failed = true;
-    ESP_LOGE(TAG, "bond storage capacity event=%u; existing bonds retained; status=BLE_HS_ESTORE_CAP (0x%X)",
+    /* Capacity can refer to CCCDs too. Security-write failures are tracked by
+     * store_write_logged; do not invalidate the remote bond on a host CCCD error. */
+    ESP_LOGE(TAG, "BLE storage capacity event=%u; records retained; status=BLE_HS_ESTORE_CAP (0x%X)",
              event->event_code, BLE_HS_ESTORE_CAP);
     return BLE_HS_ESTORE_CAP;
 }
@@ -443,8 +447,11 @@ void app_main(void)
     esp_log_level_set("REMOTE_INPUT", ESP_LOG_INFO);
     esp_log_level_set("REMOTE_STATUS", ESP_LOG_INFO);
     esp_log_level_set("MAC_HID", ESP_LOG_INFO);
+    esp_log_level_set("HOST_LINK", ESP_LOG_INFO);
+    esp_log_level_set("HID_SERVICE", ESP_LOG_INFO);
+    esp_log_level_set("HID_INPUT", ESP_LOG_INFO);
     ESP_LOGI("REMOTE_STATUS", "GUI bridge: scanning for remote; advertising host HID");
-    ESP_LOGI("REMOTE_STATUS", "bridge revision=mode-keymap-1; independent normal/cursor mappings");
+    ESP_LOGI("REMOTE_STATUS", "bridge revision=host-recovery-1; generation-guarded host recovery");
     if (!input_log_init()) { ESP_LOGE("REMOTE_STATUS", "input logger initialization failed"); return; }
     ESP_LOGI(TAG, "ESP-IDF=%s target=esp32; stage=Encrypted HID Input to Serial", esp_get_idf_version());
     if (!esp_ok("nvs_flash_init", nvs_flash_init()) || !esp_ok("nimble_port_init", nimble_port_init())) {
