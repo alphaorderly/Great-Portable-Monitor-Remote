@@ -1,5 +1,5 @@
 """A string-first editor; device writes are explicit and independently verified."""
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QCheckBox, QSpinBox, QPlainTextEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QGridLayout, QMessageBox)
@@ -16,6 +16,10 @@ class MacroPanel(QWidget):
         self.connected = self.busy = self.loading = self.dirty = False
         self.revision = None
         self.preserve_read = False
+        self.pending = False
+        self.needs_read = True
+        self.read_error = None
+        self.drafts = {}
         self.steps = []
         self.slot = 8
         self.baseline = Macro()
@@ -32,8 +36,6 @@ class MacroPanel(QWidget):
                 self.target.addItem(f'{"일반" if mode == 0 else "마우스"} 모드 · {name}', slot_for(button, mode))
         self.target.setCurrentIndex(self.target.findData(self.slot))
         targets.addWidget(self.target, 1)
-        self.read_button = QPushButton('장치에서 읽기')
-        targets.addWidget(self.read_button)
         self.stop_button = QPushButton('실행 중지')
         self.stop_button.setToolTip('장치에서 실행 중인 매크로를 중지하고 눌린 키를 해제합니다.')
         targets.addWidget(self.stop_button)
@@ -113,14 +115,19 @@ class MacroPanel(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
         footer = QHBoxLayout()
-        self.state = QLabel('먼저 장치에서 읽으면 저장할 수 있습니다.')
+        self.state = QLabel()
         self.state.setWordWrap(True)
         footer.addWidget(self.state, 1)
+        self.retry_button = QPushButton('다시 시도')
+        footer.addWidget(self.retry_button)
+        self.restore_button = QPushButton('장치 설정으로 되돌리기')
+        footer.addWidget(self.restore_button)
         self.save_button = QPushButton('매크로 저장', objectName='apply')
         footer.addWidget(self.save_button)
         layout.addLayout(footer)
         self.target.currentIndexChanged.connect(self.change_target)
-        self.read_button.clicked.connect(self.read)
+        self.retry_button.clicked.connect(self.read)
+        self.restore_button.clicked.connect(self.restore)
         self.save_button.clicked.connect(self.save)
         self.stop_button.clicked.connect(self.stop_requested)
         self.add_text.clicked.connect(lambda: self.add_step(Text('')))
@@ -244,6 +251,13 @@ class MacroPanel(QWidget):
             self.state.setText(f'{size}/512 bytes · ' + ('저장하지 않은 변경 있음' if self.dirty else '변경 없음'))
         except ValueError as exc:
             self.state.setText(str(exc))
+        if self.read_error:
+            self.state.setText(self.read_error + ' · 다시 시도해 장치 설정을 확인하세요. 편집 내용은 유지됩니다.')
+        elif self.pending:
+            self.state.setText('장치의 매크로를 확인하는 중…')
+        elif self.revision is None:
+            self.state.setText('장치의 매크로를 자동으로 읽습니다…' if self.connected else
+                               '장치를 연결하면 매크로를 자동으로 읽습니다. 편집 내용은 유지됩니다.')
         self.refresh()
 
     def confirm_replace(self):
@@ -254,29 +268,57 @@ class MacroPanel(QWidget):
 
     def change_target(self):
         slot = self.target.currentData()
-        if not self.confirm_replace():
-            self.target.blockSignals(True)
-            self.target.setCurrentIndex(self.target.findData(self.slot))
-            self.target.blockSignals(False)
+        if slot == self.slot:
             return
+        if self.dirty:
+            self.drafts[self.slot] = (self.value(), self.baseline)
+        else:
+            self.drafts.pop(self.slot, None)
         self.slot, self.revision = slot, None
-        self.populate(Macro())
-        self.state.setText('장치에서 이 버튼의 매크로를 먼저 읽어주세요.')
+        self.read_error = None
+        self.needs_read = True
+        draft, baseline = self.drafts.get(slot, (Macro(), Macro()))
+        self.populate(draft)
+        self.baseline = baseline
+        self.changed()
+        self.ensure_read()
+
+    def ensure_read(self):
+        if self.needs_read and self.connected and not self.busy and not self.pending:
+            self.read()
 
     def read(self):
-        self.preserve_read = self.revision is None and self.dirty
-        if self.preserve_read or self.confirm_replace():
-            self.requested.emit('macro_read', self.slot)
+        self.start_read(preserve=True)
+
+    def restore(self):
+        if self.connected and not self.busy and not self.pending and self.confirm_replace():
+            self.start_read(preserve=False)
+
+    def start_read(self, *, preserve):
+        if not self.connected or self.busy or self.pending:
+            return
+        self.preserve_read = preserve and self.dirty
+        self.pending = True
+        self.needs_read = False
+        self.read_error = None
+        self.revision = None
+        self.changed()
+        self.requested.emit('macro_read', self.slot)
 
     def save(self):
-        if self.revision is not None:
+        if self.save_button.isEnabled():
             self.value().encode()
+            self.pending = True
+            self.refresh()
             self.requested.emit('macro_save', (self.slot, self.revision, self.value()))
 
     def result(self, command, slot, payload):
         if command == 'macro_stop':
             self.state.setText('매크로 중지를 요청했습니다. 눌린 키를 해제합니다.')
-        elif slot == self.slot:
+        elif slot == self.slot and self.connected:
+            self.pending = False
+            self.needs_read = False
+            self.read_error = None
             self.revision, macro = payload
             if command == 'macro_read' and self.preserve_read:
                 self.baseline = macro
@@ -285,24 +327,39 @@ class MacroPanel(QWidget):
                 self.state.setText('장치의 매크로를 확인했습니다. 화면의 편집 내용은 유지했습니다.')
                 return
             self.populate(macro)
+            self.drafts.pop(slot, None)
             self.state.setText('매크로 저장 완료 · 장치에서 다시 읽어 확인했습니다.' if command == 'macro_save'
                                else '장치의 매크로를 읽었습니다. 편집 후 매크로 저장을 누르세요.')
         self.refresh()
 
     def problem(self, message):
+        self.pending = False
+        self.needs_read = False
+        self.preserve_read = False
         self.revision = None
-        self.state.setText(message + ' 다시 읽어 저장 상태를 확인하세요.')
-        self.refresh()
+        self.read_error = message
+        self.changed()
 
     def set_connection(self, connected, busy=False):
         if self.connected and not connected:
             self.revision = None
+            self.pending = False
+            self.preserve_read = False
+            self.needs_read = True
+            self.read_error = None
         self.connected, self.busy = connected, busy
         self.refresh()
+        if self.revision is None:
+            self.changed()
+        if connected and self.needs_read and not busy:
+            # Defer until the parent has finished updating its connection controls.
+            QTimer.singleShot(0, self.ensure_read)
 
     def refresh(self):
-        editable = not self.busy
-        for widget in (self.target, self.enabled, self.table, self.add_text, self.add_wait,
+        idle = not self.busy and not self.pending
+        editable = idle and (not self.connected or self.revision is not None)
+        self.target.setEnabled(idle)
+        for widget in (self.enabled, self.table, self.add_text, self.add_wait,
                        self.gap_min, self.gap_max, self.repeat_min, self.repeat_max, self.repeats,
                        self.hold, self.wait_widget, self.add_tab):
             widget.setEnabled(editable)
@@ -311,7 +368,10 @@ class MacroPanel(QWidget):
         self.up.setEnabled(editable and row > 0)
         self.down.setEnabled(editable and 0 <= row < len(self.steps)-1)
         self.remove.setEnabled(editable and row >= 0)
-        self.read_button.setEnabled(self.connected and editable)
+        self.retry_button.setVisible(self.read_error is not None)
+        self.retry_button.setEnabled(self.connected and idle)
+        self.restore_button.setVisible(self.dirty)
+        self.restore_button.setEnabled(self.connected and idle)
         self.stop_button.setEnabled(self.connected)
         try:
             self.value().encode()
