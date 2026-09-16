@@ -107,10 +107,10 @@ python python/run_keymapper.py --self-test
 
 **장치 메뉴 → 검색 진단 저장**은 마지막으로 완료된 검색 결과를 JSON으로 저장합니다. 재연결을 위한 검색도 마지막 결과에 반영됩니다. 후보 없음, 기기 발견, 검색 오류를 별도로 안내합니다. USB가 연결됐어도 HIDAPI에서 누락될 수 있으므로 빈 결과를 미연결로 단정하지 않습니다.
 
-배포 exe는 Python 설치 없이 다음과 같이 진단 파일을 만들 수도 있습니다. 실행 파일이 있는 폴더에서 실행하세요.
+배포 Windows 앱은 Python과 라이브러리를 포함한 단일 EXE입니다. Python 설치나 `_internal` 폴더 없이 실행할 수 있습니다. 다음은 x86_64 버전의 진단 파일 생성 예시입니다. ARM64에서는 파일명의 `x86_64`를 `arm64`로 바꾸고, 실행 파일이 있는 폴더에서 실행하세요.
 
 ```powershell
-.\RemoteKeyMapper.exe --diagnostics .\hid-diagnostics.json
+.\RemoteKeyMapper-windows-x86_64.exe --diagnostics .\hid-diagnostics.json
 ```
 
 이 옵션은 GUI와 작업 스레드를 시작하지 않습니다. 종료 코드는 검색 완료(후보 0개 포함) `0`, 검색 오류를 파일에 기록한 경우 `1`, 파일 저장 실패 `2`입니다. `--list`, `--self-test`, `--screenshot`과 동시에 사용할 수 없습니다. 창 모드 exe에서는 `--list`의 표준 출력이 보이지 않을 수 있으므로 진단 파일을 사용하세요.

@@ -10,7 +10,9 @@
 - Windows x86_64: `windows-2022` + x64 Python 3.12
 - Firmware: Linux의 `espressif/idf:v5.5.5` 컨테이너, NimBLE 패치 적용 후 ESP32-S3 단일 빌드와 C sanitizer 테스트
 
-각 앱 job은 Python/Qt 테스트 → PyInstaller → ZIP 압축 해제 → 실행 파일 아키텍처 검사 → 패키지 self-test → PNG 렌더링을 수행합니다. macOS는 `ditto`로 프레임워크 symlink와 실행 권한을 유지합니다. 앱 패키지에는 Python, Qt, HIDAPI가 포함됩니다.
+각 앱 job은 Python/Qt 테스트 → PyInstaller → 배포 파일 실행 → 아키텍처 검사·진단·self-test·PNG 렌더링을 수행합니다. Windows는 `--onefile`로 Python, Qt, HIDAPI를 포함한 단일 `.exe`를 만들고 릴리스에 직접 업로드합니다. 검증할 때 빈 임시 폴더에 EXE만 복사하고 자식 프로세스의 PATH를 Windows 시스템 폴더로 제한합니다. 이는 빌드 도구 경로에 대한 의존성을 검사하며, Python을 제거한 PC에서의 실기 검증을 대체하지는 않습니다. macOS는 `--onedir` 앱을 ZIP으로 배포하고 `ditto`로 프레임워크 symlink와 실행 권한을 유지합니다.
+
+Windows EXE는 실행 시 내장 런타임을 임시 폴더에 자동으로 풀어 사용하므로 시작에 잠시 시간이 걸릴 수 있습니다. 사용자에게 별도 압축 해제나 Python 설치는 필요하지 않습니다. GitHub Releases에서 EXE를 직접 다운로드할 수 있습니다. Actions의 중간 artifact 다운로드는 GitHub가 ZIP으로 제공할 수 있으며, 그 안에는 단일 EXE가 들어 있습니다.
 
 로컬 앱 빌드 / Local native build:
 
@@ -31,8 +33,8 @@ git push origin main v0.1.0
 
 버전은 새 릴리스에 맞게 바꾸세요. 이미 공개한 태그를 이동하지 마세요. 태그 이름은 `vMAJOR.MINOR.PATCH` 또는 `vMAJOR.MINOR.PATCH-suffix` 형식을 사용합니다. suffix가 있는 버전은 prerelease로 표시합니다.
 
-모든 빌드·테스트 성공 후 5개 ZIP이 정확히 있는지 검사하고 `SHA256SUMS.txt`를 생성합니다. GitHub의 자동 변경 내역을 포함한 draft release를 생성하고, 파일을 모두 업로드한 뒤 공개합니다. 재실행 시 해당 draft만 이어서 처리합니다. 이미 공개된 릴리스의 파일은 덮어쓰지 않습니다.
+모든 빌드·테스트 성공 후 Windows EXE 2개, macOS ZIP 2개, 펌웨어 ZIP 1개가 정확히 있는지 검사하고 `SHA256SUMS.txt`를 생성합니다. GitHub의 자동 변경 내역을 포함한 draft release를 생성하고, 파일을 모두 업로드한 뒤 공개합니다. 재실행 시 해당 draft만 이어서 처리합니다. 이미 공개된 릴리스의 파일은 덮어쓰지 않습니다.
 
-All four native apps and the ESP32-S3 build/tests must pass before release publication. Five ZIPs plus checksums are uploaded to a draft, then published. Reruns can recover a draft but never overwrite a published release. Tagged builds validate binaries without physical devices; Windows hardware interoperability still requires the procedure in `WINDOWS_COMPATIBILITY.md`.
+All four native apps and the ESP32-S3 build/tests must pass before release publication. Two Windows EXEs, two macOS ZIPs, one firmware ZIP and checksums are uploaded to a draft, then published. Reruns can recover a draft but never overwrite a published release. Tagged builds validate binaries without physical devices; Windows hardware interoperability still requires the procedure in `WINDOWS_COMPATIBILITY.md`.
 
 펌웨어 아카이브는 `python scripts/package_firmware.py`로 생성합니다. `firmware/build/`의 flash metadata를 사용하며, 릴리스에는 ESP32-S3 ZIP 하나가 필요합니다. ESP32-S3의 USB HID 실기 검증은 별도로 수행해야 합니다.

@@ -24,4 +24,4 @@ ESP32-S3는 리모컨과 BLE로 연결하고 PC에는 USB HID로 입력을 전�
 6. USB 분리·재연결, PC 절전·복귀, Mac↔Windows 이동을 확인합니다.
 7. 편집 중 USB가 끊겨도 편집 내용이 남고 저장 명령이 자동 반복되지 않는지 확인합니다.
 
-검색 문제가 있으면 앱의 **검색 진단 저장** 또는 `RemoteKeyMapper.exe --diagnostics hid-diagnostics.json`을 사용하세요. 열거 원본·제외 이유와 오류를 기록하며 장치 설정을 변경하지 않습니다.
+검색 문제가 있으면 앱의 **검색 진단 저장** 또는 `RemoteKeyMapper-windows-x86_64.exe --diagnostics hid-diagnostics.json`을 사용하세요. ARM64는 파일명의 `x86_64`를 `arm64`로 바꾸세요. 열거 원본·제외 이유와 오류를 기록하며 장치 설정을 변경하지 않습니다.

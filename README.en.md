@@ -13,14 +13,14 @@ Settings read/write uses the same HID connection as the selected board.
 
 ## Downloads
 
-Download your platform ZIP from the [latest release](https://github.com/alphaorderly/Great-Portable-Monitor-Remote/releases/latest) and extract the entire archive. No separate Python installation is required.
+Download the file for your platform from the [latest release](https://github.com/alphaorderly/Great-Portable-Monitor-Remote/releases/latest). **On Windows, download and run the single `.exe`.** No Python installation or `_internal` folder is needed. Extract the entire ZIP for macOS apps and firmware.
 
 | Download | Target | App or contents |
 |---|---|---|
 | `macos-arm64` | Apple Silicon, macOS 13+ | `RemoteKeyMapper.app` |
 | `macos-x86_64` | Intel Mac, macOS 13+ | `RemoteKeyMapper.app` |
-| `windows-arm64` | Windows 11 ARM64 | `RemoteKeyMapper/RemoteKeyMapper.exe` |
-| `windows-x86_64` | Windows 11 Intel/AMD 64-bit | `RemoteKeyMapper/RemoteKeyMapper.exe` |
+| `windows-arm64` | Windows 11 ARM64 | `RemoteKeyMapper-windows-arm64.exe` |
+| `windows-x86_64` | Windows 11 Intel/AMD 64-bit | `RemoteKeyMapper-windows-x86_64.exe` |
 | `firmware-esp32s3` | ESP32-S3 N16R8 | USB HID firmware and flash addresses |
 
 This project supports ESP32-S3 N16R8 only. Use the `firmware-esp32s3` ZIP. The apps are not notarized on macOS or code-signed on Windows, so you may see a security warning when opening them. File checksums are available in the release's `SHA256SUMS.txt`.
@@ -74,7 +74,7 @@ py -3.12 -m venv .venv-gui
 .venv-gui\Scripts\python.exe python/run_keymapper.py
 ```
 
-On Windows ARM64, you need ARM64 Python and Visual Studio C++ ARM64 build tools to build `hidapi==0.15.0` from source. To use the app without building it, download the release ZIP. No Linux package is provided.
+On Windows ARM64, you need ARM64 Python and Visual Studio C++ ARM64 build tools to build `hidapi==0.15.0` from source. To use the app without building it, download the Windows `.exe` from the release. No Linux package is provided.
 
 ## Development and releases
 

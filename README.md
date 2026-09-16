@@ -13,14 +13,14 @@ ESP32-S3가 리모컨의 BLE 신호를 받아 컴퓨터에 키보드·마우스�
 
 ## 다운로드
 
-[최신 릴리스](https://github.com/alphaorderly/Great-Portable-Monitor-Remote/releases/latest)에서 컴퓨터에 맞는 ZIP을 받아 전체 압축을 해제하세요. Python을 별도로 설치하지 않아도 됩니다.
+[최신 릴리스](https://github.com/alphaorderly/Great-Portable-Monitor-Remote/releases/latest)에서 컴퓨터에 맞는 파일을 받으세요. **Windows는 단일 `.exe`를 받아 바로 실행**하면 됩니다. Python 설치나 `_internal` 폴더가 필요 없습니다. macOS 앱과 펌웨어는 ZIP 전체를 압축 해제하세요.
 
 | 다운로드 파일 | 대상 | 실행 파일 또는 구성 |
 |---|---|---|
 | `macos-arm64` | Apple Silicon, macOS 13 이상 | `RemoteKeyMapper.app` |
 | `macos-x86_64` | Intel Mac, macOS 13 이상 | `RemoteKeyMapper.app` |
-| `windows-arm64` | Windows 11 ARM64 | `RemoteKeyMapper/RemoteKeyMapper.exe` |
-| `windows-x86_64` | Windows 11 Intel/AMD 64비트 | `RemoteKeyMapper/RemoteKeyMapper.exe` |
+| `windows-arm64` | Windows 11 ARM64 | `RemoteKeyMapper-windows-arm64.exe` |
+| `windows-x86_64` | Windows 11 Intel/AMD 64비트 | `RemoteKeyMapper-windows-x86_64.exe` |
 | `firmware-esp32s3` | ESP32-S3 N16R8 | USB HID 펌웨어 BIN과 설치 주소 |
 
 ESP32-S3 N16R8 전용 프로젝트입니다. 펌웨어 ZIP은 `firmware-esp32s3`를 사용하세요. 앱은 macOS 공증과 Windows 코드 서명을 받지 않아 실행 시 보안 경고가 표시될 수 있습니다. 다운로드한 파일의 해시는 릴리스의 `SHA256SUMS.txt`에서 확인할 수 있습니다.
@@ -74,7 +74,7 @@ py -3.12 -m venv .venv-gui
 .venv-gui\Scripts\python.exe python/run_keymapper.py
 ```
 
-Windows ARM64에서는 ARM64 Python과 Visual Studio C++ ARM64 빌드 도구가 필요합니다. `hidapi==0.15.0`을 소스에서 빌드하기 때문입니다. 빌드 없이 사용하려면 릴리스의 앱 ZIP을 받으세요. Linux용 배포 패키지는 제공하지 않습니다.
+Windows ARM64에서는 ARM64 Python과 Visual Studio C++ ARM64 빌드 도구가 필요합니다. `hidapi==0.15.0`을 소스에서 빌드하기 때문입니다. 빌드 없이 사용하려면 릴리스의 Windows `.exe`를 받으세요. Linux용 배포 패키지는 제공하지 않습니다.
 
 ## 개발과 릴리스
 

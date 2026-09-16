@@ -66,12 +66,12 @@ jobs:
           python -m unittest discover -s firmware/tests -v
       - name: Build native application
         run: python scripts/build_app.py --platform ${{ matrix.platform }}
-      - name: Test extracted application and architecture
+      - name: Test distributed application and architecture
         run: python scripts/smoke_app.py --platform ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}
-          path: release/*.zip
+          path: release/RemoteKeyMapper-${{ matrix.platform }}.${{ startsWith(matrix.platform, 'windows-') && 'exe' || 'zip' }}
           if-no-files-found: error
           compression-level: 0
       - uses: actions/upload-artifact@v4

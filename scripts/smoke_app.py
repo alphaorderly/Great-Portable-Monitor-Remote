@@ -1,31 +1,32 @@
-"""Extract and launch the distributed app without connecting to hardware."""
+"""Launch the distributed EXE or extracted app without connecting to hardware."""
 import argparse
 import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import struct
 import subprocess
 import tempfile
-import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--platform', required=True)
 args = parser.parse_args()
-archive = ROOT / 'release' / f'RemoteKeyMapper-{args.platform}.zip'
+extension = 'exe' if args.platform.startswith('windows-') else 'zip'
+artifact = ROOT / 'release' / f'RemoteKeyMapper-{args.platform}.{extension}'
 with tempfile.TemporaryDirectory(prefix='remote-package-') as tmp:
     tmp = Path(tmp)
     if args.platform.startswith('macos-'):
-        subprocess.run(['ditto', '-x', '-k', str(archive), str(tmp)], check=True)
-        binary = tmp / archive.stem / 'RemoteKeyMapper.app/Contents/MacOS/RemoteKeyMapper'
+        subprocess.run(['ditto', '-x', '-k', str(artifact), str(tmp)], check=True)
+        binary = tmp / artifact.stem / 'RemoteKeyMapper.app/Contents/MacOS/RemoteKeyMapper'
         actual = subprocess.check_output(['lipo', '-archs', str(binary)], text=True).strip()
         if actual != args.platform.split('-')[1]:
             raise RuntimeError(f'Wrong Mach-O architecture: {actual}')
     else:
-        with zipfile.ZipFile(archive) as z:
-            z.extractall(tmp)
-        binary = tmp / archive.stem / 'RemoteKeyMapper/RemoteKeyMapper.exe'
+        # Copy only the downloaded EXE: no _internal folder or build outputs.
+        binary = tmp / artifact.name
+        shutil.copy2(artifact, binary)
         data = binary.read_bytes()
         pe = struct.unpack_from('<I', data, 0x3c)[0]
         machine = struct.unpack_from('<H', data, pe + 4)[0]
@@ -37,6 +38,11 @@ with tempfile.TemporaryDirectory(prefix='remote-package-') as tmp:
     env = {**os.environ, 'QT_QPA_PLATFORM': qpa}
     for variable in ('PYTHONPATH', 'PYTHONHOME'):
         env.pop(variable, None)
+    if args.platform.startswith('windows-'):
+        # Keep the child process from finding the runner's Python, Qt or MSVC
+        # installations via PATH. The test driver can still use its own Python.
+        system_root = Path(os.environ['SystemRoot'])
+        env['PATH'] = os.pathsep.join(map(str, (system_root / 'System32', system_root)))
     diagnostics = tmp / 'hid-diagnostics.json'
     # This must work in a windowed exe and must not initialize a GUI. An
     # enumeration error is still useful diagnostics, with exit status 1.
@@ -61,4 +67,4 @@ with tempfile.TemporaryDirectory(prefix='remote-package-') as tmp:
     data = output.read_bytes()
     if not data.startswith(b'\x89PNG\r\n\x1a\n') or len(data) < 1000:
         raise RuntimeError('Packaged GUI failed to render a PNG')
-    print(f'PASS: extracted {args.platform} app, native architecture, HIDAPI and Qt render ({platform.machine()})')
+    print(f'PASS: distributed {args.platform} app, native architecture, HIDAPI and Qt render ({platform.machine()})')

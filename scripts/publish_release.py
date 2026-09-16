@@ -14,13 +14,16 @@ repo = os.environ['GITHUB_REPOSITORY']
 if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', tag):
     raise SystemExit(f'Invalid release tag: {tag}')
 platforms = ['macos-arm64', 'macos-x86_64', 'windows-arm64', 'windows-x86_64', 'firmware-esp32s3']
-expected = {f'RemoteKeyMapper-{p}.zip' for p in platforms}
-actual = {p.name for p in release.glob('*.zip')}
+expected = {f'RemoteKeyMapper-{p}.{"exe" if p.startswith("windows-") else "zip"}' for p in platforms}
+actual = {p.name for p in release.iterdir() if p.suffix in ('.zip', '.exe')}
 if actual != expected:
     raise SystemExit(f'Incomplete release: expected {sorted(expected)}, received {sorted(actual)}')
 checksums = release / 'SHA256SUMS.txt'
-checksums.write_text(''.join(f'{hashlib.file_digest((release / name).open("rb"), "sha256").hexdigest()}  {name}\n'
-                             for name in sorted(expected)), encoding='utf-8')
+checksum_lines = []
+for name in sorted(expected):
+    with (release / name).open('rb') as artifact:
+        checksum_lines.append(f'{hashlib.file_digest(artifact, "sha256").hexdigest()}  {name}\n')
+checksums.write_text(''.join(checksum_lines), encoding='utf-8')
 
 def gh(*args):
     subprocess.run(['gh', *args, '--repo', repo], check=True)
@@ -43,11 +46,13 @@ Native ARM64/x86_64 apps for macOS and Windows, plus ESP32-S3 USB HID firmware.
 - 매크로를 ESP32-S3에 저장하고 앱을 종료해도 리모컨으로 실행할 수 있습니다.
 - USB 제품명은 `USB Keyboard & Mouse`이며, 기존 키 설정과 매크로를 별도로 저장·검증합니다.
 - 명시적 OS별 기본값: macOS Command+Tab, Windows/Linux Alt+Tab.
-- 네 플랫폼의 테스트, 패키징, 압축 해제 후 실행·화면 렌더링과 ESP-IDF/C 회귀 검사를 통과한 빌드입니다.
+- 네 플랫폼의 테스트, 패키징, 배포 파일 실행·화면 렌더링과 ESP-IDF/C 회귀 검사를 통과한 빌드입니다.
 - 한국어·영어 README / Korean and English documentation.
 
-ZIP 전체를 해제한 뒤 앱을 실행하세요. 파일 해시는 SHA256SUMS.txt를 참고하세요.
-Extract the full ZIP before launching. Verify downloads using SHA256SUMS.txt.
+Windows는 CPU에 맞는 `RemoteKeyMapper-windows-x86_64.exe` 또는 `RemoteKeyMapper-windows-arm64.exe`를 받아 바로 실행하세요. Python 설치나 별도 폴더가 필요 없습니다.
+On Windows, download and run the EXE for your CPU. Python and dependencies are included in the single file.
+macOS 앱과 펌웨어는 ZIP 전체를 해제하세요. 파일 해시는 SHA256SUMS.txt를 참고하세요.
+Extract the full ZIP for macOS apps and firmware. Verify downloads using SHA256SUMS.txt.
 
 새 앱과 ESP32-S3 펌웨어를 함께 업데이트하세요. 문자열 입력은 미국식 QWERTY·영문 입력·Caps Lock 꺼짐 기준입니다.
 Update the app and ESP32-S3 firmware together. String macros require US QWERTY, English input mode, and Caps Lock off.
