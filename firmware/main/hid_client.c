@@ -457,7 +457,7 @@ void hid_client_on_notify(const struct ble_gap_event *event)
     ++client.notification_count;
     const unsigned length = OS_MBUF_PKTLEN(event->notify_rx.om);
     const bool selected = client.input_handle && event->notify_rx.attr_handle == client.input_handle;
-    ESP_LOGI(TAG, "GAP BLE_GAP_EVENT_NOTIFY_RX: handle=0x%04X len=%u indication=%u subscribed=%u selected=%u",
+    ESP_LOGD(TAG, "GAP BLE_GAP_EVENT_NOTIFY_RX: handle=0x%04X len=%u indication=%u subscribed=%u selected=%u",
              event->notify_rx.attr_handle, length, event->notify_rx.indication, client.subscribed, selected);
     const hid_characteristic_t *report_info = NULL;
     for (unsigned i = 0; i < client.chr_count; ++i) {
@@ -468,7 +468,7 @@ void hid_client_on_notify(const struct ble_gap_event *event)
         }
     }
     if (report_info) {
-        ESP_LOGI(TAG, "HID INPUT len=%u: Report ID=%u write_accepted=%u readback_confirmed=%u",
+        ESP_LOGD(TAG, "HID INPUT len=%u: Report ID=%u write_accepted=%u readback_confirmed=%u",
                  length, report_info->report_id, report_info->write_accepted, report_info->readback_confirmed);
     }
     if (selected) { ++client.input_count; }

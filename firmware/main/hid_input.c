@@ -18,18 +18,17 @@ static bool home_held;
 static int motion_remainder[2];
 static uint8_t remote_keys[8], remote_mouse_buttons;
 static struct ble_npl_callout heartbeat;
-static struct ble_npl_callout mouse_timer;
 static struct ble_npl_callout macro_timer;
 static uint16_t macro_down, macro_armed;
 static int macro_pending_slot=-1;
 static uint32_t macro_now(void) { return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS); }
 uint32_t macro_random(void) { return esp_random(); }
-#define MOUSE_PERIOD_MS 20
 #define MOUSE_QUEUE_SIZE 8
 static unsigned mouse_dropped;
 typedef struct { uint8_t buttons; int16_t axis[3]; } mouse_pending_t;
 static mouse_pending_t mouse_queue[MOUSE_QUEUE_SIZE];
 static unsigned mouse_count;
+static void flush_mouse(void);
 native_report_t native[3] = {
     {.id = 2, .length = 8}, {.id = 3, .length = 4}, {.id = 4, .length = 1},
 };
@@ -43,7 +42,7 @@ static void flush_native(void)
     for (unsigned i = 0; i < 3; ++i) {
         native_report_t *r = &native[i];
         if (i == 0 && macro_active()) { continue; }
-        if (i == 1 && mouse_count) { continue; } /* Preserve queued click order. */
+        if (i == 1) { flush_mouse(); continue; }
         if (r->dirty && notify_native(r, r->data)) { r->dirty = false; }
     }
 }
@@ -200,9 +199,9 @@ void hid_input_remote_mouse(const uint8_t mouse[4])
     map_remote(mouse);
 }
 
-/* A timer on the NimBLE event queue sends at most one motion report per tick.
- * Button transitions get separate bounded entries; motion with the same buttons
- * is combined. Never allocate an mbuf from the remote's notification callback. */
+/* Send immediately when USB has room. While a mouse report is outstanding,
+ * combine motion with the same buttons and preserve separate button edges.
+ * Only the NimBLE owner accesses this accumulator, including completion events. */
 void hid_input_mouse(const uint8_t mouse[4])
 {
     native_report_t *r = &native[1];
@@ -232,7 +231,7 @@ void hid_input_mouse(const uint8_t mouse[4])
             int scaled = delta * keymap_mouse_speed() + motion_remainder[i];
             delta = scaled / KEYMAP_SPEED_DEFAULT;
             motion_remainder[i] = scaled % KEYMAP_SPEED_DEFAULT;
-            /* Two maximum source deltas, split into valid HID reports by the timer. */
+            /* Bound overload to two maximum source deltas; split into HID reports. */
             int scaled_limit = 254 * keymap_mouse_speed() / KEYMAP_SPEED_DEFAULT;
             if (scaled_limit > limit) { limit = scaled_limit; }
         }
@@ -242,12 +241,13 @@ void hid_input_mouse(const uint8_t mouse[4])
         p->axis[i] = value;
     }
     r->dirty = true;
+    flush_mouse();
 }
 
-static void on_mouse_tick(struct ble_npl_event *event)
+static void flush_mouse(void)
 {
-    (void)event;
     native_report_t *r = &native[1];
+    if (suspended || !host_output_ready(r->id) || host_output_pending(r->id)) { return; }
     if (mouse_count) {
         mouse_pending_t *p = &mouse_queue[0];
         uint8_t packet[4] = {p->buttons};
@@ -262,17 +262,13 @@ static void on_mouse_tick(struct ble_npl_event *event)
                 memmove(mouse_queue, mouse_queue + 1, mouse_count * sizeof(*mouse_queue));
             }
             r->dirty = mouse_count != 0;
-        } else {
-            /* Failed movement is discarded. Retry only the latest buttons. */
-            mouse_count = 0;
-            r->dirty = true;
-            ++mouse_dropped;
         }
     } else if (r->dirty && notify_native(r, r->data)) {
         r->dirty = false;
     }
-    ble_npl_callout_reset(&mouse_timer, ble_npl_time_ms_to_ticks32(MOUSE_PERIOD_MS));
 }
+
+void hid_input_output_ready(void) { flush_native(); }
 
 
 static void on_macro_tick(struct ble_npl_event *event)
@@ -300,13 +296,11 @@ int hid_input_init(void)
 {
     int rc = ble_npl_callout_init(&heartbeat, nimble_port_get_dflt_eventq(), on_heartbeat, NULL);
     if (rc) { return rc; }
-    rc=ble_npl_callout_init(&mouse_timer, nimble_port_get_dflt_eventq(), on_mouse_tick, NULL);
-    return rc?rc:ble_npl_callout_init(&macro_timer,nimble_port_get_dflt_eventq(),on_macro_tick,NULL);
+    return ble_npl_callout_init(&macro_timer,nimble_port_get_dflt_eventq(),on_macro_tick,NULL);
 }
 int hid_input_start(void)
 {
     int rc = ble_npl_callout_reset(&heartbeat, ble_npl_time_ms_to_ticks32(1000));
-    if(!rc)rc=ble_npl_callout_reset(&mouse_timer, ble_npl_time_ms_to_ticks32(MOUSE_PERIOD_MS));
     return rc?rc:ble_npl_callout_reset(&macro_timer,ble_npl_time_ms_to_ticks32(5));
 }
 void hid_input_connected(void)
@@ -318,7 +312,6 @@ void hid_input_connected(void)
 void hid_input_reset(void)
 {
     ble_npl_callout_stop(&heartbeat);
-    ble_npl_callout_stop(&mouse_timer);
     ble_npl_callout_stop(&macro_timer);
     hid_input_connected();
 }

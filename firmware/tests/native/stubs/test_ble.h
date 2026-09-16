@@ -84,6 +84,7 @@ void test_log(const char *,...);
 void test_hex(const void *,unsigned);
 #define ESP_LOG_INFO 3
 #define ESP_LOGI(tag,...) ((void)(tag),test_log(__VA_ARGS__))
+#define ESP_LOGD(tag,...) ((void)(tag),test_log(__VA_ARGS__))
 #define ESP_LOGW(tag,...) ((void)(tag),test_log(__VA_ARGS__))
 #define ESP_LOGE(tag,...) ((void)(tag),test_log(__VA_ARGS__))
 #define ESP_LOG_BUFFER_HEX_LEVEL(tag,data,len,level) ((void)(tag),test_hex(data,len))

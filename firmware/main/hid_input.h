@@ -23,6 +23,8 @@ int hid_input_start(void);
 void hid_input_reset(void);
 void hid_input_connected(void);
 void hid_input_publish(void);
+/* Called on the input owner task when USB makes forward progress. */
+void hid_input_output_ready(void);
 void hid_input_suspend(bool enabled);
 void hid_input_mapping_changed(void);
 const uint8_t *hid_input_vendor_report(void);

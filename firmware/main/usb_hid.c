@@ -22,7 +22,9 @@ _Static_assert(CFG_TUD_HID_EP_BUFSIZE >= KEYMAP_LENGTH + 1, "HID Feature buffer 
 #define FEATURE_TIMEOUT_MS 1000
 static const char *TAG = "USB_HID";
 static SemaphoreHandle_t guard, feature_done;
-static struct ble_npl_event link_event, feature_event;
+static struct ble_npl_event link_event, feature_event, output_event;
+static TaskHandle_t tx_handle;
+static uint8_t in_flight_id;
 static bool mounted, sleeping, in_flight, owner_started, owner_active;
 static uint32_t generation, owner_generation;
 static bool retry_state;
@@ -49,6 +51,15 @@ static const uint8_t configuration[] = {
 
 static void lock(void) { xSemaphoreTake(guard, portMAX_DELAY); }
 static void unlock(void) { xSemaphoreGive(guard); }
+static void wake_tx(void)
+{
+    if (tx_handle) { xTaskNotifyGive(tx_handle); }
+}
+static void on_output_ready(struct ble_npl_event *event)
+{
+    (void)event;
+    hid_input_output_ready();
+}
 static void signal_link(void)
 {
     ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &link_event);
@@ -64,6 +75,7 @@ static void mark_link(bool connected, bool suspended)
     in_flight = false;
     unlock();
     signal_link();
+    wake_tx();
 }
 static void usb_event(tinyusb_event_t *event, void *arg)
 {
@@ -106,7 +118,7 @@ bool host_output_ready(uint8_t id)
 {
     if (id < 1 || id > 4) { return false; }
     lock();
-    bool ready = owner_active && mounted && !sleeping && owner_generation == generation;
+    bool ready = owner_active && mounted && !sleeping && !retry_state && owner_generation == generation;
     unlock();
     return ready;
 }
@@ -115,7 +127,7 @@ bool host_output_send(uint8_t id, const uint8_t *data, uint8_t length)
     static const uint8_t lengths[] = {0, REPORT_LENGTH, 8, 4, 1};
     if (id < 1 || id > 4 || length != lengths[id]) { return false; }
     lock();
-    bool ready = owner_active && mounted && !sleeping && owner_generation == generation;
+    bool ready = owner_active && mounted && !sleeping && !retry_state && owner_generation == generation;
     /* Leave three entries for native key/button releases when debug input is busy. */
     if (!ready || count >= USB_QUEUE_SIZE || (id == REPORT_ID && count >= USB_QUEUE_SIZE - 3)) {
         unlock(); return false;
@@ -125,7 +137,18 @@ bool host_output_send(uint8_t id, const uint8_t *data, uint8_t length)
     memcpy(p->data, data, length);
     ++count;
     unlock();
+    wake_tx();
     return true;
+}
+bool host_output_pending(uint8_t id)
+{
+    lock();
+    bool pending = in_flight && in_flight_id == id;
+    for (unsigned i = 0; !pending && i < count; ++i) {
+        pending = packets[(head + i) % USB_QUEUE_SIZE].id == id;
+    }
+    unlock();
+    return pending;
 }
 bool macro_send_keyboard(const uint8_t data[8])
 {
@@ -136,7 +159,7 @@ bool macro_send_keyboard(const uint8_t data[8])
         memcpy(packets[head].data,data,8);count=1;
     }
     unlock();
-    if(ready) { memcpy(native[0].data,data,8);native[0].dirty=false; }
+    if(ready) { memcpy(native[0].data,data,8);native[0].dirty=false;wake_tx(); }
     return ready;
 }
 
@@ -158,6 +181,8 @@ void tud_hid_report_complete_cb(uint8_t instance, const uint8_t *report, uint16_
 {
     (void)instance; (void)report; (void)len;
     lock(); in_flight = false; unlock();
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &output_event);
+    wake_tx();
 }
 void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t type, const uint8_t *report, uint16_t bytes)
 {
@@ -178,6 +203,7 @@ static void tx_once(void)
         usb_packet_t p = packets[head];
         head = (head + 1) % USB_QUEUE_SIZE; --count;
         in_flight = true;
+        in_flight_id = p.id;
         if (!tud_hid_report(p.id, p.data, p.length)) {
             in_flight = false;
             /* Discard old motion/click history; converge to current state. */
@@ -190,7 +216,16 @@ static void tx_once(void)
 static void tx_task(void *arg)
 {
     (void)arg;
-    for (;;) { tx_once(); vTaskDelay(1); }
+    for (;;) {
+        tx_once();
+        lock();
+        bool retry = mounted && !sleeping && count && !in_flight;
+        unlock();
+        /* Notifications are latched, including arrivals before this wait.
+         * Retry a temporarily unavailable endpoint without polling while idle
+         * or while waiting for a completion callback. */
+        ulTaskNotifyTake(pdTRUE, retry ? 1 : portMAX_DELAY);
+    }
 }
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
@@ -268,6 +303,7 @@ int usb_hid_init(void)
     if (!guard || !feature_done) { return BLE_HS_ENOMEM; }
     ble_npl_event_init(&link_event, on_link, NULL);
     ble_npl_event_init(&feature_event, on_feature, NULL);
+    ble_npl_event_init(&output_event, on_output_ready, NULL);
     keymap_init();
     macro_init();
     int rc = hid_input_init();
@@ -281,7 +317,7 @@ int usb_hid_init(void)
     cfg.descriptor.string = strings;
     cfg.descriptor.string_count = sizeof(strings) / sizeof(strings[0]);
     if (tinyusb_driver_install(&cfg) != ESP_OK) { return BLE_HS_EUNKNOWN; }
-    return xTaskCreate(tx_task, "usb_hid_tx", 3072, NULL, 4, NULL) == pdPASS ? 0 : BLE_HS_ENOMEM;
+    return xTaskCreate(tx_task, "usb_hid_tx", 3072, NULL, 4, &tx_handle) == pdPASS ? 0 : BLE_HS_ENOMEM;
 }
 /* Start input timers on every NimBLE sync. */
 int usb_hid_start(void)

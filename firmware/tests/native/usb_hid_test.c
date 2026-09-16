@@ -14,6 +14,7 @@ static struct ble_npl_event *events[8];
 static unsigned event_count;
 static usb_packet_t sent[512];
 static unsigned sent_count;
+static unsigned tx_notifications;
 static void attach(void) { tinyusb_event_t e={.id=TINYUSB_EVENT_ATTACHED};usb_event(&e,NULL); }
 static void detach(void) { tinyusb_event_t e={.id=TINYUSB_EVENT_DETACHED};usb_event(&e,NULL); }
 static void drain_owner(void)
@@ -41,8 +42,11 @@ uint32_t ble_npl_time_ms_to_ticks32(uint32_t n) { return n; }
 void test_log(const char *fmt,...) { (void)fmt; }
 TickType_t xTaskGetTickCount(void) { return now; }
 void vTaskDelay(TickType_t n) { now+=n; }
-int xTaskCreate(void (*fn)(void *),const char *name,unsigned stack,void *arg,unsigned priority,void *handle)
-{ (void)fn;(void)name;(void)stack;(void)arg;(void)priority;(void)handle;return pdPASS; }
+int xTaskCreate(void (*fn)(void *),const char *name,unsigned stack,void *arg,unsigned priority,TaskHandle_t *handle)
+{ (void)fn;(void)name;(void)stack;(void)arg;(void)priority;if(handle)*handle=&tx_notifications;return pdPASS; }
+void xTaskNotifyGive(TaskHandle_t handle) { assert(handle==tx_handle);++tx_notifications; }
+uint32_t ulTaskNotifyTake(int clear,TickType_t timeout)
+{ (void)clear;(void)timeout;unsigned n=tx_notifications;tx_notifications=0;return n; }
 static TestSemaphore semaphores[2];
 SemaphoreHandle_t xSemaphoreCreateMutex(void)
 { semaphores[0].value=1;semaphores[0].mutex=true;return &semaphores[0]; }
@@ -68,10 +72,12 @@ bool tud_hid_report(uint8_t id,const void *data,uint16_t len)
 }
 static void drain_usb(void)
 {
-    for(unsigned i=0;count && i<100;++i) {
-        tx_once(); tud_hid_report_complete_cb(0,NULL,0);
+    for(unsigned i=0;(count || in_flight || event_count) && i<100;++i) {
+        drain_owner();
+        tx_once();
+        if(in_flight)tud_hid_report_complete_cb(0,NULL,0);
     }
-    assert(!count);
+    assert(!count && !in_flight && !event_count);
 }
 static void clear_sent(void) { drain_usb();sent_count=0; }
 static void check_descriptor(void)
@@ -138,32 +144,97 @@ static void check_input(void)
         if(pressed && !sent[i].data[2])released=true;
     }
     assert(pressed && released);
-    clear_sent();hid_input_mouse(mouse);on_mouse_tick(NULL);mouse[0]=0;mouse[1]=mouse[2]=0;hid_input_mouse(mouse);on_mouse_tick(NULL);
+    clear_sent();hid_input_mouse(mouse);hid_input_output_ready();mouse[0]=0;mouse[1]=mouse[2]=0;hid_input_mouse(mouse);hid_input_output_ready();
     drain_usb();assert(sent_count==2 && sent[0].id==3 && sent[0].data[0]==1 && !sent[1].data[0]);
     /* Pressure cannot grow queues; latest key/button release eventually wins. */
     endpoint_ready=false;
     for(unsigned i=0;i<2000;++i) {
         key[2]=(i&1)?0:0x52;hid_input_keyboard(key);
-        mouse[0]=i&1;mouse[1]=1;hid_input_mouse(mouse);on_mouse_tick(NULL);
+        mouse[0]=i&1;mouse[1]=1;hid_input_mouse(mouse);hid_input_output_ready();
         assert(count<=USB_QUEUE_SIZE && mouse_count<=MOUSE_QUEUE_SIZE);
     }
-    memset(key,0,8);memset(mouse,0,4);hid_input_keyboard(key);hid_input_mouse(mouse);on_mouse_tick(NULL);
-    endpoint_ready=true;drain_usb();clear_sent();on_heartbeat(NULL);on_mouse_tick(NULL);drain_usb();
+    memset(key,0,8);memset(mouse,0,4);hid_input_keyboard(key);hid_input_mouse(mouse);hid_input_output_ready();
+    endpoint_ready=true;drain_usb();clear_sent();on_heartbeat(NULL);hid_input_output_ready();drain_usb();
     assert(!native[0].dirty && !native[1].dirty);
     for(unsigned i=0;i<sent_count;++i)if(sent[i].id==2 || sent[i].id==3)assert(!sent[i].data[0] && !sent[i].data[2]);
     /* No replay across a host generation even when unmount/mount coalesce. */
-    mouse[1]=20;hid_input_mouse(mouse);on_mouse_tick(NULL);
-    detach();attach();assert(!host_output_ready(3));drain_owner();clear_sent();on_mouse_tick(NULL);drain_usb();
+    mouse[1]=20;hid_input_mouse(mouse);hid_input_output_ready();
+    detach();attach();assert(!host_output_ready(3));drain_owner();clear_sent();hid_input_output_ready();drain_usb();
     for(unsigned i=0;i<sent_count;++i)if(sent[i].id==3)assert(!sent[i].data[1]);
     key[2]=0x4a;hid_input_keyboard(key);assert(home_held);
     tud_suspend_cb(false);drain_owner();assert(!host_output_ready(2) && !home_held);
     hid_input_mouse(mouse);assert(!mouse_count);
     tud_resume_cb();drain_owner();assert(host_output_ready(2));
-    clear_sent();hid_input_mouse(mouse);on_mouse_tick(NULL);send_failed=true;tx_once();send_failed=false;drain_owner();drain_usb();
-    on_mouse_tick(NULL);drain_usb();assert(!native[1].dirty);
+    clear_sent();hid_input_mouse(mouse);hid_input_output_ready();send_failed=true;tx_once();send_failed=false;drain_owner();drain_usb();
+    hid_input_output_ready();drain_usb();assert(!native[1].dirty);
     tud_hid_report_failed_cb(0,HID_REPORT_TYPE_INPUT,NULL,0);drain_owner();drain_usb();
     usb_hid_on_reset();assert(!host_output_ready(1) && !count);
     assert(!usb_hid_start());assert(host_output_ready(1));
+}
+
+static void check_mouse_latency(void)
+{
+    uint8_t saved[64],settings[64];keymap_read(saved);memcpy(settings,saved,64);
+    settings[7]=KEYMAP_SPEED_DEFAULT;assert(keymap_apply(settings,64)==KEYMAP_OK);
+    hid_input_mapping_changed();clear_sent();
+    TickType_t started=now;
+    unsigned notifications=tx_notifications;
+    uint8_t first[4]={0,3,(uint8_t)-2,0};
+    hid_input_mouse(first);
+    assert(count==1 && tx_notifications>notifications); /* No mouse timer needed. */
+    tx_once();assert(in_flight && !count && sent_count==1);
+    uint8_t a[4]={0,4,(uint8_t)-3,1},b[4]={0,6,(uint8_t)-4,0};
+    uint8_t down[4]={1,7,3,(uint8_t)-1},up[4]={0};
+    hid_input_mouse(a);hid_input_mouse(b);hid_input_mouse(down);hid_input_mouse(up);
+    assert(!count && mouse_count==3 && host_output_pending(3));
+    notifications=tx_notifications;
+    tud_hid_report_complete_cb(0,NULL,0);
+    assert(tx_notifications>notifications && event_count);
+    drain_owner();assert(count==1 && mouse_count==2);
+    drain_usb();
+    assert(now==started && sent_count==4 && !mouse_count && !native[1].dirty);
+    const uint8_t expected[4][4]={{0,3,254,0},{0,10,249,1},{1,7,3,255},{0,0,0,0}};
+    for(unsigned i=0;i<4;++i)assert(sent[i].id==3 && !memcmp(sent[i].data,expected[i],4));
+
+    /* High speed splits signed movement into legal reports without losing distance. */
+    keymap_read(settings);settings[7]=KEYMAP_SPEED_MAX;assert(keymap_apply(settings,64)==KEYMAP_OK);
+    hid_input_mapping_changed();clear_sent();
+    uint8_t large[4]={0,100,(uint8_t)-100,1};hid_input_mouse(large);drain_usb();
+    int x=0,y=0,wheel=0;
+    for(unsigned i=0;i<sent_count;++i) {
+        assert(sent[i].id==3);x+=(int8_t)sent[i].data[1];y+=(int8_t)sent[i].data[2];wheel+=(int8_t)sent[i].data[3];
+    }
+    assert(sent_count==3 && x==300 && y==-300 && wheel==1);
+
+    /* Fractional speed still accumulates sub-pixel deltas across completions. */
+    keymap_read(settings);settings[7]=1;assert(keymap_apply(settings,64)==KEYMAP_OK);
+    hid_input_mapping_changed();clear_sent();
+    uint8_t small[4]={0,1,(uint8_t)-1,0};
+    for(unsigned i=0;i<4;++i) { hid_input_mouse(small);drain_usb(); }
+    x=y=0;
+    for(unsigned i=0;i<sent_count;++i) { x+=(int8_t)sent[i].data[1];y+=(int8_t)sent[i].data[2]; }
+    assert(x==1 && y==-1);
+
+    /* A full USB queue keeps unsent motion until a completion makes room. */
+    keymap_read(settings);settings[7]=KEYMAP_SPEED_DEFAULT;assert(keymap_apply(settings,64)==KEYMAP_OK);
+    hid_input_mapping_changed();clear_sent();
+    uint8_t empty_key[8]={0};
+    for(unsigned i=0;i<USB_QUEUE_SIZE;++i)assert(host_output_send(2,empty_key,8));
+    hid_input_mouse(first);assert(mouse_count==1);
+    drain_usb();assert(!mouse_count);
+    unsigned mice=0;
+    for(unsigned i=0;i<sent_count;++i)if(sent[i].id==3) { ++mice;assert(!memcmp(sent[i].data,first,4)); }
+    assert(mice==1);
+
+    /* HOME discards both the queued packet's motion and the owner accumulator. */
+    hid_input_sensor_mode(true);clear_sent();
+    hid_input_remote_mouse(first);hid_input_remote_mouse(a);
+    uint8_t home[8]={0,0,0x4a};hid_input_keyboard(home);drain_usb();
+    for(unsigned i=0;i<sent_count;++i)if(sent[i].id==3)assert(!sent[i].data[1] && !sent[i].data[2] && !sent[i].data[3]);
+    memset(home,0,8);hid_input_keyboard(home);hid_input_remote_ready(false);drain_usb();
+    keymap_read(settings);settings[7]=saved[7];assert(keymap_apply(settings,64)==KEYMAP_OK);
+    hid_input_mapping_changed();drain_usb();
+    puts("PASS: immediate mouse submission, completion wakeups, coalescing/click order, signed and fractional speed, queue pressure and HOME discard");
 }
 
 static void macro_command(unsigned cmd,unsigned offset,const uint8_t *data,unsigned n,uint8_t out[64])
@@ -219,6 +290,6 @@ int main(void)
 {
     assert(!usb_hid_init());check_descriptor();
     attach();assert(!usb_hid_start());drain_owner();
-    check_features();check_input();check_macro();
+    check_features();check_input();check_mouse_latency();check_macro();
     puts("PASS: USB descriptor/Feature reports, save/readback/rollback/revision/timeout, bounded TX, releases, unplug/suspend/reset recovery");
 }

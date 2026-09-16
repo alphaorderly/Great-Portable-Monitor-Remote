@@ -1,6 +1,6 @@
 # 펌웨어 C 테스트
 
-ESP32-S3 없이 컴퓨터에서 실행하는 C 테스트 6종과 NimBLE 주소 처리 테스트입니다. macOS·Linux·WSL에서 C 컴파일러(`cc`), Python, 프로젝트 패치가 적용된 ESP-IDF SDK가 필요합니다. 저장소 루트에서 실행하세요.
+ESP32-S3 없이 컴퓨터에서 실행하는 C 테스트 7종과 NimBLE 주소 처리 테스트입니다. macOS·Linux·WSL에서 C 컴파일러(`cc`), Python, 프로젝트 패치가 적용된 ESP-IDF SDK가 필요합니다. 저장소 루트에서 실행하세요.
 
 ```sh
 python firmware/tests/native/run_tests.py --idf-path /path/to/esp-idf
@@ -23,6 +23,8 @@ C의 기본 키 매핑을 `shared/fixtures/keymap-default.hex`와 대조합니�
 저장 장치와 NimBLE/FreeRTOS 호출, IRK 매칭은 모의 구현을 사용하므로 무선 동작이나 AES 암호화는 검사하지 않습니다. ABI 호환성은 ESP-IDF 빌드로, USB Feature 통신·전원 재시작 후 설정 보존·컨트롤러 ROM assertion 발생 여부는 실제 하드웨어에서 확인해야 합니다.
 
 - `usb_hid_test`: USB 어댑터와 입력 엔진의 실제 C 코드를 모의 USB/작업 큐로 실행합니다. descriptor, 65바이트 Feature 교환의 payload, 저장·readback·revision·NVS 실패·요청 타임아웃, 큐 포화·버튼 해제·재연결·절전·리셋 복구를 검사합니다. 실제 USB 열거와 전기적 연결은 검사하지 않습니다.
+
+  마우스 입력은 20ms 타이머 없이 제출되고, USB 전송 작업은 새 보고서와 전송 완료 알림으로 깨어납니다. 테스트는 타이머 진행 없이 첫 이동 제출·완료 후 다음 보고서 제출, 버튼 상태별 이동 합치기와 클릭 순서, 0.25배/3배 이동량 보존, 큐 포화 시 재시도, HOME의 대기 이동 폐기를 검사합니다. 실제 수신→USB 완료 지연과 운영체제의 커서 반응은 하드웨어에서 별도로 측정해야 합니다.
 
 - `macro_test`: 모든 출력 가능한 ASCII·Shift·Enter·Tab, 단계 검증, revision 충돌·NVS 실패·부분 업로드 취소·만료, 고정/랜덤 간격의 양 끝값, 반복 횟수, 전송 정체, 중지와 시간 카운터 wraparound를 검사합니다.
 - `usb_hid_test`의 매크로 항목: Feature ID 6 저장·readback, 저장 직후 첫 버튼 입력, 빠른 재입력과 실행 중 재입력의 취소, USB 실패와 재연결 후 자동 재실행 방지를 검사합니다.
