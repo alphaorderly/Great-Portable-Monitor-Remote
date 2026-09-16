@@ -8,12 +8,10 @@ import sys
 
 import hid
 from build_info import get_build_info
-from protocol import DEVICE_NAME, USAGE_PAGE, USAGE, is_bridge
+from protocol import DEVICE_NAME, USB_DEVICE_NAME, USAGE_PAGE, USAGE, is_bridge
 
 NAMED = "named_bridge"
-UNVERIFIED = "unverified_bluetooth"
 EXCLUDED = "excluded"
-BLUETOOTH_BUS = 2  # HID_API_BUS_BLUETOOTH, including BLE.
 
 
 def classify(device):
@@ -22,14 +20,13 @@ def classify(device):
     if not isinstance(device.get("path"), bytes) or not device["path"]:
         return EXCLUDED, "missing_hid_path"
     if is_bridge(device):
-        return NAMED, "matching_name_or_manufacturer"
-    if device.get("bus_type") == BLUETOOTH_BUS:
-        return UNVERIFIED, "bluetooth_usage_matches_protocol_not_checked"
-    return EXCLUDED, "name_mismatch_and_not_confirmed_bluetooth"
+        return NAMED, "matching_s3_usb_name"
+    return EXCLUDED, "not_esp32s3_usb_bridge"
 
 
 def device_label(device, index=1):
-    name = "Bluetooth 설정 장치 · 확인 필요" if device.get("discovery_kind") == UNVERIFIED else DEVICE_NAME
+    product = device.get("product_string") or DEVICE_NAME
+    name = f"{USB_DEVICE_NAME if product == USB_DEVICE_NAME else DEVICE_NAME} · USB"
     return f"{name} · {device.get('serial_number') or index}"
 
 
@@ -52,9 +49,7 @@ class DiscoveryResult:
         if self.error:
             return f"HID 검색 오류: {self.error} · 검색 진단을 저장해 확인하세요."
         if not self.devices:
-            return "설정용 장치 후보가 없습니다. Bluetooth 상태를 확인하거나 검색 진단을 저장하세요."
-        if any(d["discovery_kind"] == UNVERIFIED for d in self.devices):
-            return "확인 필요한 Bluetooth 후보가 있습니다. 선택 후 연결하면 ESP32 설정 형식을 확인합니다."
+            return "설정용 장치 후보가 없습니다. USB 연결 상태를 확인하거나 검색 진단을 저장하세요."
         return "기기를 선택하고 연결하세요."
 
 

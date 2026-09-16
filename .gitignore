@@ -19,3 +19,5 @@ docs/*
 !docs/FIRMWARE.md
 !docs/WINDOWS_COMPATIBILITY.md
 !docs/RELEASING.md
+
+firmware/managed_components/

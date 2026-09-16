@@ -6,7 +6,7 @@
 #include "host/ble_hs.h"
 #include "host/ble_gatt.h"
 #include "hid_client.h"
-#include "mac_hid.h"
+#include "hid_input.h"
 #include "input_codec.h"
 #include "input_log.h"
 
@@ -293,7 +293,7 @@ static void next_report(void)
         }
         ESP_LOGI("REMOTE_STATUS", "HID LISTENING: Input CCCD writes_accepted=%u readbacks_confirmed=%u keyboard_handle=0x%04X",
                  accepted, confirmed, client.input_handle);
-        mac_hid_remote_ready(true);
+        hid_input_remote_ready(true);
         ESP_LOGI("REMOTE_STATUS", "ORDER: POWER > GEAR > CURSOR > SETTINGS > UP > DOWN > LEFT > RIGHT > OK > BACK > HOME > APPS > VOL+ > VOL-");
         if (confirmed != accepted) {
             ESP_LOGW(TAG, "Subscription state remains uncertain; only actual notifications prove input reception");
@@ -446,7 +446,7 @@ void hid_client_stop(uint16_t conn_handle)
     client.active = false;
     client.listening = false;
     client.started = false;
-    mac_hid_remote_ready(false);
+    hid_input_remote_ready(false);
     client.subscribed = false;
     ESP_LOGI(TAG, "HID client stopped: input_reports=%u total_notifications=%u", client.input_count, client.notification_count);
 }
@@ -479,7 +479,7 @@ void hid_client_on_notify(const struct ble_gap_event *event)
         uint8_t status[20];
         if (!os_mbuf_copydata(event->notify_rx.om, 0, sizeof(status), status)) {
             int mode = input_sensor_mode(status, sizeof(status));
-            if (mode >= 0) { mac_hid_sensor_mode(mode == 1); }
+            if (mode >= 0) { hid_input_sensor_mode(mode == 1); }
         }
         return;
     }
@@ -488,7 +488,7 @@ void hid_client_on_notify(const struct ble_gap_event *event)
         if ((length == 4 || length == 20) &&
             os_mbuf_copydata(event->notify_rx.om, 0, length, raw) == 0 &&
             input_mouse_decode(raw, length, mouse)) {
-            mac_hid_remote_mouse(mouse);
+            hid_input_remote_mouse(mouse);
         } else {
             ESP_LOGW(TAG, "ID 3 format differs from captured mouse layout; raw only");
         }
@@ -500,7 +500,7 @@ void hid_client_on_notify(const struct ble_gap_event *event)
     }
     uint8_t report[KEYBOARD_REPORT_LENGTH];
     if (os_mbuf_copydata(event->notify_rx.om, 0, sizeof(report), report) != 0) { return; }
-    mac_hid_keyboard(report);
+    hid_input_keyboard(report);
     static const uint8_t released[KEYBOARD_REPORT_LENGTH] = {0};
     if (memcmp(report, released, sizeof(report)) == 0) { ESP_LOGI(TAG, "KEY: RELEASE_ALL"); return; }
     ESP_LOGI(TAG, "KEYBOARD modifiers=0x%02X reserved=0x%02X", report[0], report[1]);

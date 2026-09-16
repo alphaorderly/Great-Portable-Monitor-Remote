@@ -5,7 +5,8 @@ usage() {
     cat <<'EOF'
 Usage: ./flash-macos.sh
 
-Detect serial ports and select the port, flash mode, and serial monitor in a menu.
+Select the ESP32-S3 UART/COM serial port; verify the chip before flashing.
+S3: use UART/COM for flashing and logs, USB/OTG for PC HID.
 Uses ESP-IDF 5.5.5; the project's local SDK is activated automatically if available.
 EOF
 }

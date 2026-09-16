@@ -13,7 +13,7 @@ from worker import HidWorker
 
 
 def device_info(path=b"bridge", serial="SERIAL-1"):
-    return dict(path=path, serial_number=serial, product_string="ESP32 Remote Bridge", usage_page=0xff00, usage=1)
+    return dict(path=path, serial_number=serial, product_string="ESP32-S3 Remote Bridge", usage_page=0xff00, usage=1)
 
 
 class Endpoint:

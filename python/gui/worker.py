@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, Signal
 from discovery import discover
 from connection import ConnectionEvent, ConnectionState, DeviceIdentity, DeviceSelectionRequired, ReconnectPolicy
 from hid_session import HidSession
+from macros import MacroProtocol
 from debugging import DebugBatch, DebugDecoder, MODES
 
 LOG = logging.getLogger("keymapper")
@@ -21,12 +22,16 @@ class HidWorker(QObject):
     settings = Signal(object, str)
     problem = Signal(str)
     debug_reports = Signal(object)
+    macro_result = Signal(str, int, object)
+    macro_problem = Signal(str)
+    macro_overrides = Signal(int)
 
     def __init__(self, *, clock=None, enumerate_devices=None, device_factory=None):
         super().__init__()
         self.commands = queue.Queue()
         self.stopping = threading.Event()
         self.cancel_requested = threading.Event()
+        self.macro_stop_requested = threading.Event()
         self.runner = threading.Thread(target=self.run, daemon=True)
         self.clock = clock or time.monotonic
         self.enumerate_devices = enumerate_devices or hid.enumerate
@@ -104,6 +109,11 @@ class HidWorker(QObject):
             if self._cancelled():
                 self.session.close()
                 return
+            if candidate.get("product_string") == "USB Keyboard & Mouse":
+                mask, _ = MacroProtocol(self.session.device, self._cancelled).status()
+                self.macro_overrides.emit(mask)
+            else:
+                self.macro_overrides.emit(0)
             operation = "reconnect" if self.ever_ready else "connect"
             reason = "설정 읽기 완료 · HID 통신 사용 가능"
             if self.pending_save is not None:
@@ -124,7 +134,7 @@ class HidWorker(QObject):
             self._transport_failed(exc)
         except ValueError as exc:
             self._fatal(exc if isinstance(exc, DeviceSelectionRequired) else
-                        ValueError(f"ESP32 설정 프로토콜 불일치: 지원 장치인지 또는 앱·펌웨어 버전이 맞는지 확인하세요. {exc}"))
+                        ValueError(f"ESP32-S3 설정 프로토콜 불일치: 지원 장치인지 또는 앱·펌웨어 버전이 맞는지 확인하세요. {exc}"))
         except Exception as exc:
             LOG.exception("HID initialization failed")
             self._fatal(exc)
@@ -155,9 +165,36 @@ class HidWorker(QObject):
             self.ever_ready = False
             self._reset_debug()
             self._attempt()
+        elif command in ("macro_read", "macro_save", "macro_stop"):
+            if not self.session.device or self._cancelled():
+                self.macro_problem.emit("사용 가능한 장치에 먼저 연결하세요.")
+                return
+            if command == "macro_stop":
+                self.macro_stop_requested.clear()
+            protocol = MacroProtocol(self.session.device, lambda: self._cancelled() or self.macro_stop_requested.is_set())
+            try:
+                if command == "macro_read":
+                    slot = payload
+                    result = protocol.read(slot)
+                elif command == "macro_save":
+                    slot, revision, macro = payload
+                    result = protocol.save(slot, revision, macro)
+                else:
+                    slot, result = -1, None
+                    protocol.stop()
+                mask, _ = protocol.status()
+                self.macro_overrides.emit(mask)
+                self.macro_result.emit(command, slot, result)
+            except (OSError, ValueError) as exc:
+                self.macro_problem.emit(str(exc))
+                if isinstance(exc, OSError) and not self.macro_stop_requested.is_set():
+                    self._transport_failed(exc)
+            except Exception as exc:
+                LOG.exception("Macro command failed")
+                self.macro_problem.emit(str(exc))
         elif command in ("read", "apply"):
             if not self.session.device or self._cancelled():
-                self.problem.emit("사용 가능한 ESP32에 먼저 연결하세요.")
+                self.problem.emit("사용 가능한 ESP32-S3에 먼저 연결하세요.")
                 return
             try:
                 if command == "apply":
@@ -220,6 +257,10 @@ class HidWorker(QObject):
             self._fatal(exc)
         finally:
             self.session.close()
+
+    def request_macro_stop(self):
+        self.macro_stop_requested.set()
+        self.commands.put(("macro_stop", None))
 
     def request_connect(self, path):
         self.cancel_requested.clear()

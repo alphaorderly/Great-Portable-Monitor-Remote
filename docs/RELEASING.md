@@ -8,7 +8,7 @@
 - macOS x86_64: `macos-15-intel` + x64 Python 3.12
 - Windows ARM64: `windows-11-arm` + ARM64 Python 3.12, MSVC ARM64로 hidapi 소스 빌드
 - Windows x86_64: `windows-2022` + x64 Python 3.12
-- Firmware: Linux의 `espressif/idf:v5.5.5` 컨테이너, NimBLE 패치 적용 후 ESP32 빌드와 C sanitizer 테스트
+- Firmware: Linux의 `espressif/idf:v5.5.5` 컨테이너, NimBLE 패치 적용 후 ESP32-S3 단일 빌드와 C sanitizer 테스트
 
 각 앱 job은 Python/Qt 테스트 → PyInstaller → ZIP 압축 해제 → 실행 파일 아키텍처 검사 → 패키지 self-test → PNG 렌더링을 수행합니다. macOS는 `ditto`로 프레임워크 symlink와 실행 권한을 유지합니다. 앱 패키지에는 Python, Qt, HIDAPI가 포함됩니다.
 
@@ -33,4 +33,6 @@ git push origin main v0.1.0
 
 모든 빌드·테스트 성공 후 5개 ZIP이 정확히 있는지 검사하고 `SHA256SUMS.txt`를 생성합니다. GitHub의 자동 변경 내역을 포함한 draft release를 생성하고, 파일을 모두 업로드한 뒤 공개합니다. 재실행 시 해당 draft만 이어서 처리합니다. 이미 공개된 릴리스의 파일은 덮어쓰지 않습니다.
 
-All four native apps and the ESP32 build/tests must pass before release publication. Five ZIPs plus checksums are uploaded to a draft, then published. Reruns can recover a draft but never overwrite a published release. Tagged builds validate binaries without physical Bluetooth devices; Windows hardware interoperability still requires the procedure in `WINDOWS_COMPATIBILITY.md`.
+All four native apps and the ESP32-S3 build/tests must pass before release publication. Five ZIPs plus checksums are uploaded to a draft, then published. Reruns can recover a draft but never overwrite a published release. Tagged builds validate binaries without physical devices; Windows hardware interoperability still requires the procedure in `WINDOWS_COMPATIBILITY.md`.
+
+펌웨어 아카이브는 `python scripts/package_firmware.py`로 생성합니다. `firmware/build/`의 flash metadata를 사용하며, 릴리스에는 ESP32-S3 ZIP 하나가 필요합니다. ESP32-S3의 USB HID 실기 검증은 별도로 수행해야 합니다.

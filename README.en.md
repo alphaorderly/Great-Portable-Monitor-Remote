@@ -4,12 +4,11 @@
 
 Control a macOS or Windows computer with a Great Portable Monitor remote.
 
-An ESP32 receives BLE signals from the remote and sends keyboard, mouse and volume input to your computer. Use **Remote Key Mapper** to assign button actions separately for normal and cursor modes. Once saved to the ESP32, your mappings work with the app closed.
+An ESP32-S3 receives BLE signals from the remote and sends keyboard, mouse and volume input to your computer. Use **Remote Key Mapper** to assign button actions separately for normal and cursor modes. Once saved to the ESP32-S3, your mappings work with the app closed.
 
 ```text
-Remote ── BLE ── ESP32 ── BLE HID ── macOS / Windows
-                   ↑                     │
-                   └── saved mappings ───┘
+Remote ── BLE ── ESP32-S3 ── USB HID ── macOS / Windows
+Settings read/write uses the same HID connection as the selected board.
 ```
 
 ## Downloads
@@ -22,21 +21,21 @@ Download your platform ZIP from the [latest release](https://github.com/alphaord
 | `macos-x86_64` | Intel Mac, macOS 13+ | `RemoteKeyMapper.app` |
 | `windows-arm64` | Windows 11 ARM64 | `RemoteKeyMapper/RemoteKeyMapper.exe` |
 | `windows-x86_64` | Windows 11 Intel/AMD 64-bit | `RemoteKeyMapper/RemoteKeyMapper.exe` |
-| `firmware-esp32` | ESP32 | Firmware binaries and flash addresses |
+| `firmware-esp32s3` | ESP32-S3 N16R8 | USB HID firmware and flash addresses |
 
-The firmware is for the original ESP32 and cannot be used on ESP32-S2/S3/C3 chips. The apps are not notarized on macOS or code-signed on Windows, so you may see a security warning when opening them. File checksums are available in the release's `SHA256SUMS.txt`.
+This project supports ESP32-S3 N16R8 only. Use the `firmware-esp32s3` ZIP. The apps are not notarized on macOS or code-signed on Windows, so you may see a security warning when opening them. File checksums are available in the release's `SHA256SUMS.txt`.
 
 ## Getting started
 
-1. Install the [firmware](docs/FIRMWARE.md) on an ESP32 and turn on the remote. See that guide for first pairing.
-2. Pair **ESP32 Remote Bridge** in your computer's Bluetooth settings.
-3. Launch the app and choose **기기 찾기 → 연결** (Find devices → Connect) to load the mappings saved on the ESP32.
+1. Install the [firmware](docs/FIRMWARE.md) on an ESP32-S3 and turn on the remote. See that guide for first pairing.
+2.  connect USB/OTG to the PC; use the separate UART/COM port for flashing and logs. No PC Bluetooth pairing is needed for S3.
+3. Launch the app and choose **기기 찾기 → 연결** (Find devices → Connect) to load the mappings saved on the ESP32-S3.
 4. Choose **일반 모드 / 마우스 커서 모드** (Normal / Cursor mode) and edit button actions.
-5. Choose **ESP32에 적용·저장** (Apply and save). The app confirms completion after checking the saved settings.
+5. Choose **ESP32-S3에 적용·저장** (Apply and save). The app confirms completion after checking the saved settings.
 
 Modifier keys are labeled **Ctrl / Control, Shift, Alt / Option, Win / Command**. To assign a copy shortcut, choose Ctrl+C on Windows or Command+C on macOS.
 
-The app-list button defaults to Command+Tab. For initial Windows setup, select Windows under **기본값 대상** (Preset target), click **현재 모드 기본값** (Current mode defaults) for each mode, then save. This changes the app-list button to Alt+Tab. Selecting an OS alone does not change saved mappings.
+The app-list button defaults to Command+Tab. For initial Windows setup, select Windows in **설정 메뉴** (Settings menu), click **기본값 불러오기** (Load defaults) for each mode, then save. This changes the app-list button to Alt+Tab. Selecting an OS alone does not change saved mappings.
 
 ![Remote Key Mapper](python/gui/keymapper-preview.png)
 
@@ -44,8 +43,10 @@ The app interface is in Korean.
 
 ## Features and limitations
 
+ESP32-S3 USB HID hardware interoperability on macOS and Windows is still unverified. The firmware builds and simulated tests are separate from hardware acceptance.
+
 - Assign arrows, letters, digits, symbols, F1–F24, navigation keys, volume, three mouse buttons and keyboard modifiers.
-- In cursor mode, use the mouse speed slider to select 0.25–3× (default 1×), then save it to the ESP32.
+- In cursor mode, use the mouse speed slider to select 0.25–3× (default 1×), then save it to the ESP32-S3.
 - Hold Home in cursor mode to freeze the pointer while repositioning your hand. Movement during the hold is discarded; releasing Home resumes from the current pointer position. Normal-mode Home mappings remain available.
 - These features require both the updated app and firmware. Existing settings migrate at 1× speed, and cursor-mode Home becomes reserved for pausing movement.
 - The cursor button switches modes and cannot be reassigned.
@@ -87,7 +88,7 @@ python firmware/scripts/build.py -B build build
 python firmware/tests/native/run_tests.py --idf-path /path/to/esp-idf
 ```
 
-Pushes to `main` and pull requests build and test the apps on all four platforms, build the ESP32 firmware and run the C tests. Pushing a `v*` tag publishes the four apps, firmware and SHA-256 checksums to GitHub Releases once all checks pass. See the [release guide](docs/RELEASING.md) for details.
+Pushes to `main` and pull requests build and test the apps on all four platforms, build ESP32-S3 firmware and run the C tests. Pushing a `v*` tag publishes the four apps, the ESP32-S3 firmware ZIP and SHA-256 checksums to GitHub Releases once all checks pass. See the [release guide](docs/RELEASING.md) for details.
 
 | Directory | Contents |
 |---|---|
@@ -98,3 +99,7 @@ Pushes to `main` and pull requests build and test the apps on all four platforms
 | `docs/` | Usage, compatibility and release guides |
 
 [Python guide](python/README.md) · [Firmware](docs/FIRMWARE.md) · [Windows review](docs/WINDOWS_COMPATIBILITY.md)
+
+## String macros
+
+The new app and firmware support per-button ASCII strings, uppercase and punctuation, Enter/Tab, randomized inter-character delays and wait steps, and up to 100 repetitions. Read, edit, and save using the **문자열 매크로** tab; saved macros run from the remote with the app closed. Use a US QWERTY layout, English input mode, and Caps Lock off. The new USB product name is `USB Keyboard & Mouse`; standard HID compatibility does not guarantee that an application cannot identify automation. See the [macro guide](python/README.md#문자열-매크로).

@@ -1,3 +1,6 @@
+#ifndef CONFIG_IDF_TARGET
+#define CONFIG_IDF_TARGET "esp32s3"
+#endif
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
@@ -8,6 +11,7 @@ typedef struct { uint8_t type, val[6]; } ble_addr_t;
 #define BLE_ADDR_PUBLIC_ID 2
 #define BLE_ADDR_RANDOM_ID 3
 #define CONFIG_BT_NIMBLE_MAX_BONDS 4
+#define CONFIG_BT_NIMBLE_MAX_CONNECTIONS 3
 #define CONFIG_BT_NIMBLE_MAX_CCCDS 16
 #define CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT 12
 int os_msys_count(void);
@@ -18,6 +22,8 @@ int os_msys_num_free(void);
 #define BLE_HS_ENOENT 5
 #define BLE_HS_EMSGSIZE 4
 #define BLE_HS_EENCRYPT 25
+#define BLE_GAP_ROLE_MASTER 0
+#define BLE_GAP_ROLE_SLAVE 1
 #define BLE_GATT_CHR_PROP_NOTIFY 0x10
 #define BLE_GATT_CHR_PROP_READ 0x02
 #define BLE_UUID_STR_LEN 37
@@ -36,6 +42,7 @@ struct ble_gap_conn_desc {
     struct { bool encrypted, bonded, authenticated; uint8_t key_size; } sec_state;
     ble_addr_t peer_id_addr, peer_ota_addr;
     uint16_t conn_handle, conn_itvl, conn_latency, supervision_timeout;
+    uint8_t role;
 };
 struct ble_gap_disc_desc { int event_type,rssi; ble_addr_t addr; const uint8_t *data; unsigned length_data; };
 struct ble_gap_upd_params { unsigned itvl_min,itvl_max,latency,supervision_timeout; };
@@ -52,7 +59,7 @@ struct ble_gap_event {
     struct { int reason; struct ble_gap_conn_desc conn; } disconnect;
     struct { int reason; } adv_complete, disc_complete;
     struct ble_gap_disc_desc disc;
-    struct { unsigned status; } pairing_complete;
+    struct { int status; uint16_t conn_handle; } pairing_complete;
     struct { struct { unsigned action; } params; uint16_t conn_handle; } passkey;
     struct { const struct ble_gap_upd_params *peer_params; } conn_update_req;
     struct { int status; uint16_t conn_handle; } conn_update;
@@ -127,7 +134,12 @@ struct ble_gatt_chr_def {
     uint16_t *val_handle; const struct ble_gatt_dsc_def *descriptors;
 };
 struct ble_gatt_svc_def { int type; const ble_uuid_t *uuid; const struct ble_gatt_chr_def *characteristics; };
-struct ble_npl_event { int unused; };
+struct ble_npl_event { void (*fn)(struct ble_npl_event *); void *arg; };
+void ble_npl_event_init(struct ble_npl_event *, void (*)(struct ble_npl_event *), void *);
+void ble_npl_eventq_put(void *, struct ble_npl_event *);
+#ifndef BLE_HS_ENOMEM
+#define BLE_HS_ENOMEM 6
+#endif
 struct ble_npl_callout { int unused; };
 struct ble_hs_adv_fields {
     unsigned flags; const ble_uuid16_t *uuids16; unsigned num_uuids16, uuids16_is_complete;
@@ -160,7 +172,7 @@ int ble_gap_adv_set_fields(const struct ble_hs_adv_fields *);
 int ble_gap_adv_rsp_set_fields(const struct ble_hs_adv_fields *);
 int ble_gap_adv_start(uint8_t,const ble_addr_t *,int,const struct ble_gap_adv_params *,int (*)(struct ble_gap_event *,void *),void *);
 struct ble_store_key_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle; };
-struct ble_store_value_cccd { unsigned flags; };
+struct ble_store_value_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle, flags; };
 int ble_store_read_cccd(const struct ble_store_key_cccd *,struct ble_store_value_cccd *);
 int ble_store_util_bonded_peers(ble_addr_t *,int *,int);
 int ble_store_util_delete_peer(const ble_addr_t *);
@@ -172,7 +184,11 @@ int ble_store_util_delete_peer(const ble_addr_t *);
 #define BLE_HS_ERR_SM_US_BASE 0x400
 #define BLE_HS_ERR_SM_PEER_BASE 0x500
 #define BLE_HS_ERR_HW_BASE 0x600
-#define BLE_HS_ESTORE_CAP 29
+#define BLE_HS_ESTORE_CAP 0x1b
+#define BLE_HS_EINVAL 3
+#define BLE_HS_EUNKNOWN 17
+#define BLE_STORE_EVENT_OVERFLOW 1
+#define BLE_STORE_EVENT_FULL 2
 #define BLE_STORE_OBJ_TYPE_OUR_SEC 1
 #define BLE_STORE_OBJ_TYPE_PEER_SEC 2
 #define BLE_STORE_OBJ_TYPE_CCCD 3
@@ -195,9 +211,19 @@ typedef int esp_err_t;
 #define ESP_OK 0
 #define ESP_LOG_WARN 2
 struct ble_store_key_sec { ble_addr_t peer_addr; };
-struct ble_store_value_sec { bool ltk_present,sc,authenticated; uint8_t key_size; };
-union ble_store_value { int unused; };
-struct ble_store_status_event { unsigned event_code; };
+struct ble_store_value_sec { ble_addr_t peer_addr; uint16_t bond_count; bool ltk_present,sc,authenticated; uint8_t key_size; };
+union ble_store_value { struct ble_store_value_sec sec; struct ble_store_value_cccd cccd; };
+struct ble_store_status_event {
+    int event_code;
+    union {
+        struct { int obj_type; const union ble_store_value *value; } overflow;
+        struct { int obj_type; uint16_t conn_handle; } full;
+    };
+};
+typedef int ble_store_iterator_fn(int,union ble_store_value *,void *);
+int ble_store_iterate(int,ble_store_iterator_fn *,void *);
+int ble_store_util_count(int,int *);
+int ble_gap_conn_find_by_addr(const ble_addr_t *,struct ble_gap_conn_desc *);
 typedef int ble_store_write_fn(int,const union ble_store_value *);
 struct test_hs_cfg {
     void (*sync_cb)(void); void (*reset_cb)(int);

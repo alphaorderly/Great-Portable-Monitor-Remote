@@ -11,13 +11,24 @@ bool bridge_peer_equal(const ble_addr_t *a, const ble_addr_t *b)
 
 bool bridge_peer_load(const char *role, ble_addr_t *peer)
 {
+    bool found;
+    return bridge_peer_load_checked(role, peer, &found) && found;
+}
+
+bool bridge_peer_load_checked(const char *role, ble_addr_t *peer, bool *found)
+{
+    *found = false;
     nvs_handle_t handle;
-    if (nvs_open("bridge_peers", NVS_READONLY, &handle) != ESP_OK) { return false; }
+    esp_err_t rc = nvs_open("bridge_peers", NVS_READONLY, &handle);
+    if (rc == ESP_ERR_NVS_NOT_FOUND) { return true; }
+    if (rc != ESP_OK) { return false; }
     uint8_t data[7]; size_t size = sizeof(data);
-    esp_err_t rc = nvs_get_blob(handle, role, data, &size);
+    rc = nvs_get_blob(handle, role, data, &size);
     nvs_close(handle);
+    if (rc == ESP_ERR_NVS_NOT_FOUND) { return true; }
     if (rc != ESP_OK || size != sizeof(data) || data[0] > BLE_ADDR_RANDOM) { return false; }
     peer->type = data[0]; memcpy(peer->val, data + 1, 6);
+    *found = true;
     return true;
 }
 

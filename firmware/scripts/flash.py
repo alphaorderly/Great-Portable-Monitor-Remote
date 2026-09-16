@@ -1,4 +1,4 @@
-"""Interactive ESP32 flashing for the macOS and Windows shell entry points."""
+"""Interactive ESP32-S3 flashing for the macOS and Windows shell entry points."""
 from pathlib import Path
 import subprocess
 import sys
@@ -30,7 +30,7 @@ def choose_port():
                 details.append(f"S/N {port.serial_number}")
             print(f"  {index}. {port.device} | {' | '.join(details)}")
         if not ports:
-            print("포트를 찾지 못했습니다. ESP32를 데이터 통신용 USB 케이블로 연결하세요.")
+            print("포트를 찾지 못했습니다. ESP32-S3를 데이터 통신용 USB 케이블로 연결하세요.")
         print("  r. 다시 탐지    q. 종료")
         while True:
             answer = ask("포트 번호 또는 r/q: ")
@@ -52,11 +52,38 @@ def choose(title, options, default):
         print("목록의 번호 또는 q를 입력하세요.")
 
 
+def detect_chip(port):
+    # esptool speaks the ROM protocol; USB-UART VID/PID cannot identify the SoC.
+    # Probe without writing flash, then close before idf.py owns the port.
+    import esptool
+    import serial
+
+    # Own the handle even if esptool fails during synchronization/detection.
+    connection = serial.serial_for_url(port, baudrate=115200, exclusive=True, do_not_open=True)
+    try:
+        connection.dtr = connection.rts = False
+        connection.open()
+        chip = esptool.detect_chip(port=connection, baud=115200)
+        return chip.CHIP_NAME.lower().replace("-", "")
+    finally:
+        connection.close()
+
+
+def verify_chip(port):
+    target = "esp32s3"
+    actual = detect_chip(port)
+    if actual != target:
+        raise ValueError(f"펌웨어/칩 불일치: 선택={target}, 실제={actual}. 설치하지 않습니다.")
+
+
 def main():
     try:
-        print("=== ESP32 펌웨어 플래시 ===")
-        print("원래 ESP32 칩용 / ESP-IDF 5.5.5 / 취소: q 또는 Ctrl+C")
+        print("=== ESP32-S3 펌웨어 플래시 ===")
+        print("ESP-IDF 5.5.5 / 취소: q 또는 Ctrl+C")
+        target = "esp32s3"
+        print("UART/COM 포트는 플래시·로그용, USB/OTG 포트는 PC HID용입니다.")
         port = choose_port()
+        verify_chip(port)
         action = choose("플래시 방식", [
             ("flash", "전체 설치: 부트로더 + 파티션 테이블 + 앱"),
             ("app-flash", "앱만 갱신: 기존과 동일한 파티션 레이아웃일 때 사용"),
@@ -69,7 +96,8 @@ def main():
         if port not in {item.device for item in discover_ports()}:
             print(f"\n선택한 포트 {port}의 연결이 끊어졌습니다. 다시 실행하세요.", file=sys.stderr)
             return 1
-        print(f"\n{port}: {'전체 설치' if action == 'flash' else '앱만 갱신'} 빌드 및 플래시 시작", flush=True)
+        verify_chip(port)
+        print(f"\n{target} · {port}: {'전체 설치' if action == 'flash' else '앱만 갱신'} 빌드 및 플래시 시작", flush=True)
         command = [sys.executable, str(Path(__file__).with_name("build.py")),
                    "-B", "build", "-p", port, action]
         if monitor:
@@ -82,10 +110,10 @@ def main():
         print("\n중단했습니다.")
         return 130
     except ImportError:
-        print("ESP-IDF의 pyserial을 찾지 못했습니다. ESP-IDF 5.5.5 환경을 활성화하세요.", file=sys.stderr)
+        print("ESP-IDF의 pyserial/esptool을 찾지 못했습니다. ESP-IDF 5.5.5 환경을 활성화하세요.", file=sys.stderr)
         return 1
-    except OSError as error:
-        print(f"시리얼 탐지 또는 실행에 실패했습니다: {error}", file=sys.stderr)
+    except Exception as error:
+        print(f"칩 검증 또는 실행에 실패했습니다: {error}", file=sys.stderr)
         return 1
 
 

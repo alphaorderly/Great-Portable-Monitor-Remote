@@ -70,7 +70,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(Report.decode(frame(1, (0xAB,))).keys, {0xAB})
 
     def test_only_dedicated_collection_matches(self):
-        target = {"product_string": "ESP32 Remote Bridge", "usage_page": 0xFF00, "usage": 1}
+        target = {"product_string": "ESP32-S3 Remote Bridge", "usage_page": 0xFF00, "usage": 1}
         self.assertTrue(is_bridge(target))
         self.assertFalse(is_bridge({**target, "usage_page": 7}))
         self.assertFalse(is_bridge({**target, "product_string": "Other vendor device"}))
@@ -82,6 +82,61 @@ class GuiTests(unittest.TestCase):
     def setUpClass(cls):
         from PySide6.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_selected_button_editor_tracks_navigation_modes_and_save(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from app import KeyMapper
+        from mapping import DEFAULTS, Snapshot, KEY
+        window = KeyMapper(start_worker=False, host_platform="darwin")
+        try:
+            window.show()
+            self.app.processEvents()
+            self.assertEqual(window.editor_title.text(), "OK")
+            window.table.setFocus()
+            QTest.keyClick(window.table, Qt.Key.Key_Down)
+            self.assertEqual(window.editor_title.text(), "뒤로가기")
+            self.assertEqual(window.editor_stack.currentIndex(), 9)
+            self.assertFalse(window.dirty)
+            combo, checks = window.controls[0xF1]
+            combo.setCurrentIndex(combo.findData((KEY << 8) | 4))
+            QTest.mouseClick(checks[8], Qt.MouseButton.LeftButton)
+            self.assertEqual(window.action_preview.text(), "⌘ + A")
+            self.assertEqual(window.table.item(9, 1).text(), "⌘ + A")
+            window.mapping_mode.setCurrentIndex(1)
+            self.assertEqual(window.action_preview.text(), "Esc")
+            window.mapping_mode.setCurrentIndex(0)
+            self.assertEqual(window.action_preview.text(), "⌘ + A")
+            window.on_connection(ConnectionEvent(ConnectionState.READY))
+            window.on_settings(Snapshot(4, DEFAULTS), "connect")
+            window.apply_settings()
+            self.assertFalse(window.editor.isEnabled())
+            command, snapshot = window.worker.commands.get_nowait()
+            self.assertEqual(command, "apply")
+            self.assertEqual(snapshot.entries[9].key, 4)
+            self.assertEqual(snapshot.entries[9].modifiers, 8)
+            self.assertEqual(snapshot.mouse_entries[9].key, 0x29)
+        finally:
+            window.close()
+
+    def test_reserved_and_mouse_actions_show_only_relevant_controls(self):
+        from app import KeyMapper
+        window = KeyMapper(start_worker=False, host_platform="darwin")
+        try:
+            window.table.setCurrentCell(10, 0)
+            window.mapping_mode.setCurrentIndex(1)
+            self.assertTrue(window.action_groups[0x4A].isHidden())
+            self.assertTrue(window.modifier_groups[0x4A].isHidden())
+            self.assertIn("변경할 수 없습니다", window.editor_hint.text())
+            window.table.setCurrentCell(8, 0)
+            self.assertFalse(window.action_groups[0x28].isHidden())
+            self.assertTrue(window.modifier_groups[0x28].isHidden())
+            window.mapping_mode.setCurrentIndex(0)
+            self.assertFalse(window.modifier_groups[0x28].isHidden())
+            self.assertFalse(window.dirty)
+            self.assertTrue(window.worker.commands.empty())
+        finally:
+            window.close()
 
     def test_mapper_defaults_and_explicit_verified_save(self):
         from app import KeyMapper
@@ -351,7 +406,7 @@ class DebugTests(unittest.TestCase):
         worker.commands.put(("debug", MODES[1]))
         worker.commands.put(("connect", b"only-bridge"))
         clock = itertools.count()
-        with patch.object(worker, "enumerate_devices", return_value=[{"product_string": "ESP32 Remote Bridge",
+        with patch.object(worker, "enumerate_devices", return_value=[{"product_string": "ESP32-S3 Remote Bridge",
                    "usage_page": 0xFF00, "usage": 1, "path": b"only-bridge"}]), \
              patch.object(worker.session, "device_factory", return_value=device), \
              patch("hid_session.configure_shared_access"), \
@@ -380,7 +435,7 @@ class MappingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(snapshot, mouse_entries=bad_home).encode()
         old = bytes.fromhex((Path(__file__).resolve().parents[2] / "shared/fixtures/keymap-v2-default.hex").read_text())
-        with self.assertRaisesRegex(ValueError, "새 ESP32 펌웨어"):
+        with self.assertRaisesRegex(ValueError, "새 ESP32-S3 펌웨어"):
             Snapshot.decode(old)
 
     def test_protocol_roundtrip_and_shared_c_defaults(self):

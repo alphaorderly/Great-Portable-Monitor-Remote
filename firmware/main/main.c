@@ -13,8 +13,9 @@
 #include "host/ble_store.h"
 #include "host/util/util.h"
 #include "hid_client.h"
-#include "mac_hid.h"
+#include "usb_hid.h"
 #include "bridge_peers.h"
+#include "bond_store.h"
 #include "input_log.h"
 
 #define SCAN_DURATION_MS 30000
@@ -38,9 +39,7 @@ static uint16_t remote_conn = BLE_HS_CONN_HANDLE_NONE;
 static struct ble_npl_callout scan_retry;
 static ble_addr_t remote_identity;
 static bool have_remote_identity;
-static bool bond_store_failed;
 static unsigned report_count;
-static ble_store_write_fn *original_store_write;
 
 /* Active scan delivers ADV and SCAN_RSP separately; merge only the same address/type. */
 typedef struct {
@@ -133,33 +132,6 @@ static bool read_peer_bond(const ble_addr_t *identity)
     return rc == 0 && value.ltk_present;
 }
 
-static int store_write_logged(int type, const union ble_store_value *value)
-{
-    const int rc = original_store_write(type, value);
-    if (type == BLE_STORE_OBJ_TYPE_OUR_SEC || type == BLE_STORE_OBJ_TYPE_PEER_SEC) {
-        ESP_LOGI(TAG, "bond storage write: type=%s status=%d (0x%X) NVS_enabled=1",
-                 type == BLE_STORE_OBJ_TYPE_OUR_SEC ? "OUR_SEC" : "PEER_SEC", rc, (unsigned)rc);
-        if (rc != 0) {
-            bond_store_failed = true;
-            ESP_LOGE(TAG, "bond storage failed; encryption alone is not bonding success");
-        }
-    }
-    if (type == BLE_STORE_OBJ_TYPE_CCCD && rc != 0) {
-        ESP_LOGE(TAG, "subscription storage failed: status=%d; existing records retained", rc);
-    }
-    return rc;
-}
-
-static int store_status(struct ble_store_status_event *event, void *arg)
-{
-    (void)arg;
-    /* Capacity can refer to CCCDs too. Security-write failures are tracked by
-     * store_write_logged; do not invalidate the remote bond on a host CCCD error. */
-    ESP_LOGE(TAG, "BLE storage capacity event=%u; records retained; status=BLE_HS_ESTORE_CAP (0x%X)",
-             event->event_code, BLE_HS_ESTORE_CAP);
-    return BLE_HS_ESTORE_CAP;
-}
-
 static void log_connection(uint16_t handle, bool check_security_result)
 {
     struct ble_gap_conn_desc desc;
@@ -178,7 +150,7 @@ static void log_connection(uint16_t handle, bool check_security_result)
              desc.sec_state.encrypted, desc.sec_state.bonded);
     if (check_security_result) {
         const bool stored_ltk = read_peer_bond(&desc.peer_id_addr);
-        if (desc.sec_state.encrypted && desc.sec_state.bonded && stored_ltk && !bond_store_failed) {
+        if (desc.sec_state.encrypted && desc.sec_state.bonded && stored_ltk && bond_store_peer_ok(&desc.peer_id_addr)) {
             remote_identity = desc.peer_id_addr;
             have_remote_identity = true;
             bridge_peer_save("remote", &remote_identity);
@@ -187,7 +159,7 @@ static void log_connection(uint16_t handle, bool check_security_result)
         } else {
             hid_client_stop(handle);
             ESP_LOGW(TAG, "SECURITY CHECK INCOMPLETE: peer_LTK_present=%u storage_error=%u",
-                     stored_ltk, bond_store_failed);
+                     stored_ltk, !bond_store_peer_ok(&desc.peer_id_addr));
         }
     }
 }
@@ -224,7 +196,7 @@ static void log_advertisement(const struct ble_gap_disc_desc *report)
     /* Bonded remotes may wake with a directed/nameless advertisement. */
     if (connectable && have_remote_identity && bridge_peer_equal(&remote_identity, &report->addr)) {
         candidate_t known = {.addr = report->addr};
-        ESP_LOGI("REMOTE_STATUS", "bonded remote awake; reconnect using stored key");
+        ESP_LOGI("REMOTE_STATUS", "known remote awake; attempting reconnect to stored identity");
         connect_once(&known);
         return;
     }
@@ -317,7 +289,6 @@ static int gap_callback(struct ble_gap_event *event, void *arg)
             break;
         }
         remote_conn = event->connect.conn_handle;
-        bond_store_failed = false;
         /* Issue security before detailed output or any application GATT procedure. */
         const int rc = ble_gap_security_initiate(event->connect.conn_handle);
         ESP_LOGI("REMOTE_STATUS", "CONNECTED: handle=%u", event->connect.conn_handle);
@@ -346,6 +317,7 @@ static int gap_callback(struct ble_gap_event *event, void *arg)
         }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
+        bond_store_clear_peer(&event->disconnect.conn.peer_id_addr);
         hid_client_stop(event->disconnect.conn.conn_handle);
         log_status("GAP BLE_GAP_EVENT_DISCONNECT", event->disconnect.reason);
         ESP_LOGI("REMOTE_STATUS", "DISCONNECTED: reason=%d (0x%X) encrypted=%u bonded=%u; retry in 2s",
@@ -418,8 +390,8 @@ static void on_sync(void)
     scan_started = connection_attempted = false;
     remote_conn = BLE_HS_CONN_HANDLE_NONE;
     have_remote_identity = bridge_peer_load("remote", &remote_identity) && bridge_peer_bonded(&remote_identity, true);
-    rc = mac_hid_advertise(own_addr_type);
-    if (rc) { ESP_LOGW("MAC_HID", "advertising start failed: rc=%d; scheduled retry", rc); }
+    rc = usb_hid_start();
+    if (rc) { ESP_LOGW("USB_HID", "input start failed: rc=%d", rc); }
     start_scan(NULL);
 }
 
@@ -428,7 +400,8 @@ static void on_reset(int reason)
     log_status("NimBLE host reset", reason);
     host_synced = false;
     ble_npl_callout_stop(&scan_retry);
-    mac_hid_on_reset();
+    bond_store_reset_results();
+    usb_hid_on_reset();
     if (remote_conn != BLE_HS_CONN_HANDLE_NONE) { hid_client_stop(remote_conn); }
     remote_conn = BLE_HS_CONN_HANDLE_NONE;
     scan_started = connection_attempted = false;
@@ -446,22 +419,21 @@ void app_main(void)
     esp_log_level_set("*", ESP_LOG_WARN);
     esp_log_level_set("REMOTE_INPUT", ESP_LOG_INFO);
     esp_log_level_set("REMOTE_STATUS", ESP_LOG_INFO);
-    esp_log_level_set("MAC_HID", ESP_LOG_INFO);
-    esp_log_level_set("HOST_LINK", ESP_LOG_INFO);
-    esp_log_level_set("HID_SERVICE", ESP_LOG_INFO);
+    esp_log_level_set("USB_HID", ESP_LOG_INFO);
+    esp_log_level_set("BOND_STORE", ESP_LOG_INFO);
     esp_log_level_set("HID_INPUT", ESP_LOG_INFO);
-    ESP_LOGI("REMOTE_STATUS", "GUI bridge: scanning for remote; advertising host HID");
-    ESP_LOGI("REMOTE_STATUS", "bridge revision=host-recovery-1; generation-guarded host recovery");
+    ESP_LOGI("REMOTE_STATUS", "GUI bridge: scanning for remote; starting host HID");
+    ESP_LOGI("REMOTE_STATUS", "bridge revision=esp32s3-usb-1");
     if (!input_log_init()) { ESP_LOGE("REMOTE_STATUS", "input logger initialization failed"); return; }
-    ESP_LOGI(TAG, "ESP-IDF=%s target=esp32; stage=Encrypted HID Input to Serial", esp_get_idf_version());
+    ESP_LOGI(TAG, "ESP-IDF=%s target=%s; stage=Remote HID bridge", esp_get_idf_version(), CONFIG_IDF_TARGET);
     if (!esp_ok("nvs_flash_init", nvs_flash_init()) || !esp_ok("nimble_port_init", nimble_port_init())) {
         ESP_LOGE(TAG, "initialization stopped; existing NVS retained");
         return;
     }
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
-    int mac_rc = mac_hid_init();
-    if (mac_rc) { ESP_LOGE("MAC_HID", "service initialization failed: rc=%d", mac_rc); return; }
+    int usb_rc = usb_hid_init();
+    if (usb_rc) { ESP_LOGE("USB_HID", "service initialization failed: rc=%d", usb_rc); return; }
     int retry_rc = ble_npl_callout_init(&scan_retry, nimble_port_get_dflt_eventq(), start_scan, NULL);
     if (retry_rc) { ESP_LOGE("REMOTE_STATUS", "scan timer initialization failed: rc=%d", retry_rc); return; }
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
@@ -473,13 +445,12 @@ void app_main(void)
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_store_config_init();
-    original_store_write = ble_hs_cfg.store_write_cb;
-    if (!original_store_write) {
-        ESP_LOGE(TAG, "bond storage initialization has no write callback; stopped");
+    if (bond_store_init(ble_hs_cfg.store_write_cb) != 0) {
+        ESP_LOGE(TAG, "bond storage initialization failed; stopped");
         return;
     }
-    ble_hs_cfg.store_write_cb = store_write_logged;
-    ble_hs_cfg.store_status_cb = store_status;
+    ble_hs_cfg.store_write_cb = bond_store_write;
+    ble_hs_cfg.store_status_cb = bond_store_status;
     ESP_LOGI(TAG, "security config: Bonding=1 IO=NoInputNoOutput MITM=0 SC=0 SC_only=0 Legacy=1 NVS=1");
     nimble_port_freertos_init(host_task);
 }

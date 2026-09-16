@@ -1,4 +1,4 @@
-"""Version 3 of the ESP32 keymap Feature Report (ID 5)."""
+"""Version 3 of the ESP32-S3 keymap Feature Report (ID 5)."""
 from dataclasses import dataclass, replace
 from protocol import BUTTONS
 
@@ -80,7 +80,7 @@ class Snapshot:
                 raise ValueError("키 매핑 Feature Report가 아닙니다.")
             raw = raw[1:]
         if len(raw) != PAYLOAD_LENGTH or raw[:4] != b"KM\x03\x0e" or raw[6] != 2:
-            raise ValueError("마우스 속도와 홈 버튼 일시 정지를 지원하는 새 ESP32 펌웨어가 필요합니다.")
+            raise ValueError("마우스 속도와 홈 버튼 일시 정지를 지원하는 새 ESP32-S3 펌웨어가 필요합니다.")
         modes = []
         for mode in range(2):
             entries = []

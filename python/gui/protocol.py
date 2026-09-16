@@ -1,7 +1,9 @@
-"""The versioned vendor HID report shared with main/mac_hid.c."""
+"""The versioned vendor HID report shared with the ESP32-S3 USB HID descriptor."""
 from dataclasses import dataclass
 
-DEVICE_NAME = "ESP32 Remote Bridge"
+DEVICE_NAME = "ESP32-S3 Remote Bridge"
+USB_DEVICE_NAME = "USB Keyboard & Mouse"
+MANUFACTURER = "Local Remote Bridge"
 USAGE_PAGE = 0xFF00
 USAGE = 1
 BUTTONS = {
@@ -21,8 +23,10 @@ def is_bridge(device: dict) -> bool:
     return (
         device.get("usage_page") == USAGE_PAGE
         and device.get("usage") == USAGE
+        and device.get("bus_type") in (None, 0, 1)
         and (DEVICE_NAME.casefold() in (device.get("product_string") or "").casefold()
-             or device.get("manufacturer_string") == "Local Remote Bridge")
+             or ((device.get("product_string") or "").casefold() == USB_DEVICE_NAME.casefold()
+                 and (device.get("manufacturer_string") or "").casefold() == MANUFACTURER.casefold()))
     )
 
 

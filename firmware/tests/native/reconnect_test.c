@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "../../main/main.c"
 
+extern bool test_bond_store_failure;
 static const uint8_t TEST_ADDRESS[6] = {1, 2, 3, 4, 5, 6};
 static bool saved_remote = true;
 static unsigned scans,connects,security_requests,hid_starts,hid_stops,adverts;
@@ -23,9 +24,9 @@ void nimble_port_freertos_deinit(void) {}
 void *nimble_port_get_dflt_eventq(void) { return NULL; }
 void ble_store_config_init(void) {}
 bool input_log_init(void) { return true; }
-int mac_hid_init(void) { return 0; }
-int mac_hid_advertise(uint8_t type) { (void)type; ++adverts; return 0; }
-void mac_hid_on_reset(void) {}
+int usb_hid_init(void) { return 0; }
+int usb_hid_start(void) { ++adverts; return 0; }
+void usb_hid_on_reset(void) {}
 void hid_client_start(uint16_t conn) { assert(conn==7); ++hid_starts; }
 void hid_client_stop(uint16_t conn) { (void)conn; ++hid_stops; }
 void hid_client_on_notify(const struct ble_gap_event *event) { (void)event; }
@@ -93,6 +94,9 @@ int main(void)
     gap_callback(&event,NULL); assert(remote_conn==7 && security_requests==1 && !hid_starts);
     unsigned previous=scans; start_scan(NULL); assert(scans==previous);
     event=(struct ble_gap_event){.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=7}};
+    test_bond_store_failure=true;
+    gap_callback(&event,NULL); assert(hid_starts==0);
+    test_bond_store_failure=false;
     gap_callback(&event,NULL); assert(hid_starts==1);
     event=(struct ble_gap_event){.type=BLE_GAP_EVENT_DISCONNECT,.disconnect={.conn={.conn_handle=7}}};
     gap_callback(&event,NULL); assert(remote_conn==BLE_HS_CONN_HANDLE_NONE && delay==2000 && hid_stops);

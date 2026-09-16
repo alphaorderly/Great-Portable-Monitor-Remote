@@ -1,61 +1,79 @@
 [한국어](../README.md) | [English](../README.en.md)
 
-# ESP32 펌웨어 / Firmware
+# ESP32-S3 펌웨어 / Firmware
 
-원래 ESP32 칩용 ESP-IDF **5.5.5** 프로젝트입니다. 호스트가 macOS/Windows, ARM64/x86_64 어느 조합이든 ESP32에 설치하는 펌웨어는 같습니다. ESP32-S2/S3/C3용으로 플래시하지 마세요.
+ESP-IDF **5.5.5**, **ESP32-S3 N16R8**(16MB flash, 8MB PSRAM) 전용 단일 프로젝트입니다. PSRAM은 사용하지 않습니다. 소스는 `firmware/main/`, 설정은 `firmware/sdkconfig.defaults`, 빌드 결과는 `firmware/build/`에 있습니다.
 
-This ESP-IDF 5.5.5 project targets the original ESP32. The same firmware serves every host OS/CPU. It is not a firmware image for S2/S3/C3 chips.
-
-## 릴리스 BIN 설치 / Flash release binaries
-
-릴리스의 `firmware-esp32` ZIP을 풀고, Python과 `esptool==4.12.0`을 설치한 터미널에서 그 폴더로 이동합니다.
-
-```sh
-python -m pip install esptool==4.12.0
-# 최초 설치: bootloader, partition table, application
-python -m esptool --chip esp32 --port PORT write_flash @flash_args
-# 동일한 partition table을 사용하는 기존 장치의 앱만 갱신
-python -m esptool --chip esp32 --port PORT write_flash 0x10000 remote_ble_scan.bin
+```text
+리모컨 ── BLE ── ESP32-S3 ── USB HID ── macOS / Windows
 ```
 
-`PORT`는 Windows의 `COM3` 또는 macOS의 `/dev/cu.usbserial-...` 등 실제 연결 포트로 바꾸세요. PowerShell에서는 `@flash_args`를 문자열로 인식하도록 `"@flash_args"`로 입력합니다. 기존 동일 레이아웃에서 앱만 갱신하면 NVS의 페어링·매핑을 유지합니다. 이 명령은 `erase_flash`를 실행하지 않습니다.
+## 포트와 설치 / Ports and flashing
 
-Extract the firmware ZIP, enter that directory, install esptool 4.12.0 and replace `PORT` with your serial port. Quote `"@flash_args"` in PowerShell. The app-only command preserves NVS when updating an existing installation with the same partition layout.
+- **UART/COM**: 펌웨어 설치 및 115200 baud 로그.
+- **USB/OTG**: PC 입력 및 설정 앱. `ESP32-S3 Remote Bridge · USB`를 선택하세요.
 
-## 소스 빌드 / Build from source
+네이티브 USB(GPIO19=D−, GPIO20=D+)를 사용합니다. USB-UART만 연결하면 HID가 동작하지 않습니다. 포트 인쇄를 확인하세요. 정상 사용에는 USB/OTG만 연결할 수 있고 로그가 필요하면 UART/COM도 연결합니다. PC Bluetooth 페어링은 필요하지 않습니다.
 
-[Espressif 설치 문서](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32/get-started/index.html)를 따라 ESP-IDF 5.5.5의 ESP32 도구를 설치하고 환경을 활성화합니다. Windows에서는 ESP-IDF 터미널 또는 `export.ps1`, macOS/Linux에서는 `export.sh`를 사용합니다.
+macOS에서는 `./flash-macos.sh`, Windows ESP-IDF 환경의 Git Bash에서는 `bash flash-windows.sh`를 실행하세요. 포트 → 전체 설치/앱만 갱신 → 모니터 순서로 선택합니다. 칩을 두 번 확인하며 ESP32-S3가 아니면 설치하지 않습니다. 앱만 갱신은 기존 파티션 레이아웃이 같을 때만 사용하세요.
 
-저장소 루트에서 / From the repository root:
+## 소스 빌드 / Build
+
+ESP-IDF 5.5.5 환경과 ESP32-S3 툴체인을 준비한 뒤 저장소 루트에서 실행합니다. 로컬 macOS SDK는 `source firmware/env.zsh`로 활성화할 수 있습니다.
 
 ```sh
-python firmware/scripts/build.py -B build build
-python firmware/scripts/build.py -B build -p PORT app-flash monitor
+python firmware/scripts/build.py build
+python firmware/scripts/build.py -p /dev/cu.usbserial-0001 flash
+python scripts/package_firmware.py
 ```
 
-`build.py`는 OS 공통 진입점입니다. 활성화한 `IDF_PATH`의 NimBLE RPA identity 수정 패치를 멱등 적용한 뒤 `idf.py`를 실행합니다. SDK의 예상 코드가 다르면 빌드를 중단합니다. 다른 버전의 SDK에 패치를 강제로 적용하지 마세요. 기존 로컬 macOS 설치는 `firmware/env.zsh`도 계속 사용할 수 있습니다.
+Windows에서는 포트를 `COM3` 같은 이름으로 바꾸세요. 빌드 대상은 `esp32s3`로 고정되며 `--target` 선택 옵션은 없습니다. `-B build`는 `firmware/build/`를 뜻합니다. 다른 칩 또는 이전 프로젝트의 캐시를 발견하면 중단합니다. 이전 ESP32의 `sdkconfig`와 빌드 캐시는 재사용하지 마세요. 필요한 로그를 보관한 후 해당 캐시를 이동하고 새로 빌드하세요.
 
-The wrapper applies the included NimBLE identity fix to the activated SDK, then runs `idf.py`. It stops if the expected SDK source does not match. Use the pinned version. Windows ARM64 GUI support does not imply native Windows ARM64 support for Espressif's compiler; use Espressif's supported build environment or download the CI firmware.
+빌드 래퍼는 NimBLE RPA identity 패치를 멱등 적용합니다. USB 의존성은 `esp_tinyusb==2.0.0`과 `firmware/dependencies.lock`으로 고정합니다. 아카이브는 생성된 flash metadata의 주소와 파일을 그대로 사용하며 `release/RemoteKeyMapper-firmware-esp32s3.zip`에 저장합니다.
+
+This is a single ESP32-S3 project. Build with `python firmware/scripts/build.py build`; package with `python scripts/package_firmware.py`. Use UART/COM to flash and USB/OTG for PC HID. Foreign build caches and non-S3 chips are rejected.
 
 ## 리모컨과 호스트 연결
 
-ESP32는 부팅 시 호스트용 `ESP32 Remote Bridge`를 광고하면서 리모컨을 검색합니다. 최초 연결은 펌웨어 `main.c`의 `TARGET_NAME`과 HID Service UUID가 일치하는 리모컨 광고를 사용합니다. 리모컨을 제조사의 Bluetooth 페어링 모드로 설정하고, 기존 컴퓨터가 리모컨을 직접 잡고 있으면 그 연결을 해제하세요. 저장된 리모컨은 본드 identity로 재연결합니다. 모델별 페어링 버튼 조합은 이 프로젝트에서 확정하지 않았습니다.
+부팅 시 리모컨을 검색합니다. 최초 연결은 `main.c`의 `TARGET_NAME`과 HID Service UUID가 일치하는 광고를 사용합니다. 리모컨을 제조사 페어링 모드로 설정하고, 컴퓨터가 리모컨을 직접 연결하고 있으면 그 연결을 해제하세요. 이후에는 저장된 본드 identity로 재연결합니다. 모델별 페어링 버튼 조합은 확정하지 않았습니다.
 
-컴퓨터 Bluetooth 설정에서 **ESP32 Remote Bridge**를 페어링하세요. 브리지는 한 번에 한 호스트에 입력을 전달합니다. 다른 컴퓨터로 바꿀 때 기존 호스트 연결을 해제하세요. 저장된 리모컨 identity가 없는 아주 오래된 펌웨어에서 이전하면 리모컨을 다시 페어링 모드로 설정해야 할 수 있습니다.
+PC는 USB로 연결합니다. 컴퓨터를 바꾸려면 USB/OTG 케이블을 새 PC에 연결하세요. 앱의 **연결 해제**는 설정 앱의 HID 접근과 재시도만 종료하며 키보드·마우스 입력은 계속 동작합니다.
 
-At boot, the ESP32 advertises `ESP32 Remote Bridge` to the host and scans for the remote. First discovery matches `TARGET_NAME` and the HID service; subsequent connections use the stored bond identity. Put the remote in its manufacturer's pairing mode and disconnect any computer directly holding it. Pair the bridge in your computer's Bluetooth settings. Only one host receives input at a time.
+리모컨 본딩과 매핑은 NVS에 저장합니다. 저장 실패 시 전체 NVS를 초기화하지 않습니다. 본드 저장 공간이 부족하면 등록된 리모컨·현재 연결 기기·저장 대상을 보호하며 오래된 비활성 상대 기록을 교체합니다.
 
-## 연결 복구와 PC 전환
+## USB HID와 검증
 
-브리지는 Mac과 Windows의 페어링을 저장하되 한 번에 한 PC에 연결합니다. PC를 바꿀 때는 기존 PC의 Bluetooth 연결을 먼저 해제하세요. 앱의 **연결 해제**는 설정 앱의 HID 접근만 닫으며 OS Bluetooth 연결을 해제하지 않습니다. 기존 PC가 자동으로 다시 연결되면 그 PC의 Bluetooth를 잠시 끄고 새 PC에서 연결하세요.
+Vendor collection FF00/1에서 입력 ID 1과 설정 Feature ID 5를 제공합니다. 키보드·마우스·볼륨은 ID 2·3·4입니다. 설정 payload는 64바이트(Report ID 포함 65바이트)이며, NVS 저장 후 읽어서 revision과 내용을 확인합니다. USB와 BLE 사이의 설정 변경은 NimBLE 작업에서 직렬 처리합니다. 앱은 저장을 자동 반복하지 않습니다.
 
-- 부팅 시 마지막으로 연결했던 PC를 대상으로 3초간 광고한 뒤 일반 광고를 유지합니다. 연결 종료가 확인되면 1초 후 일반 광고를 재개합니다.
-- PC가 연결된 뒤 15초 안에 암호화·본딩이 확인되지 않으면 기존 키를 보존하고 연결을 종료합니다. 종료 요청 실패는 1초 간격으로 최대 3회 재시도하며, 전체 스택이나 NVS를 자동 초기화하지 않습니다.
-- 암호화 후 HID 구독이 늦거나 일부만 있어도 연결을 끊지 않습니다. 키보드·마우스·볼륨은 각각 구독된 입력을 계속 전달합니다. 설정 앱의 구독은 키 입력의 필수 조건이 아닙니다.
-- 페어링 오류가 반복되면 **문제가 발생한 PC의 Bluetooth 설정에서 ESP32 Remote Bridge만 제거하고 다시 페어링**하세요. ESP32는 현재 PC의 재페어링 요청에서 보안 수준을 검사한 후 해당 PC 기록만 교체합니다. 다른 PC·리모컨·키 매핑을 초기화하지 않습니다. 재페어링이 되지 않아도 `erase_flash`를 복구 기본 절차로 사용하지 마세요.
+macOS·Windows에서 USB 열거, 리모컨 최초 페어링·재연결, 실제 입력, 매핑 저장·재부팅 유지, USB 재연결·절전 복귀를 확인해야 합니다. **ESP32-S3 실기 동작은 아직 미검증입니다.** 자동 테스트는 USB/FreeRTOS를 모의하며 실제 PHY나 OS 드라이버 동작을 증명하지 않습니다.
 
-기본 저장 한도는 본딩 4개, CCCD 16개입니다. CCCD는 PC별 입력 알림 구독을 저장하는 항목이며, 동시에 연결할 수 있는 PC 수를 뜻하지 않습니다. 저장소가 가득 차면 기존 기록을 자동으로 지우지 않고 오류를 기록합니다. 기존 `sdkconfig`는 기본값보다 우선하므로 소스 업데이트 후 `CONFIG_BT_NIMBLE_MAX_BONDS=4`, `CONFIG_BT_NIMBLE_MAX_CCCDS=16`인지 확인하세요.
+## 플래시 없이 시리얼 로그만 보기
 
-Serial 진단에는 부팅 시 빌드 버전과 `host-recovery-1`, `HOST_LINK`의 단계·세대·경과 시간·상태 코드·종료 재시도, 입력별 구독 상태가 남습니다. `Repeated host security failure`는 같은 peer에서 보안 실패가 세 번 연속 발생했음을 뜻합니다. 이 횟수는 부팅 동안만 유지됩니다. `subscription storage failed`와 보안 키 저장 실패를 구분해 확인하세요. 암호 키 값은 출력하지 않습니다.
+저장소 루트에서 다음 스크립트를 실행하고 포트를 선택하세요. 기본 속도는 115200 baud이며 **Ctrl+C**로 종료합니다. SDK 빌드·패치·플래시를 실행하지 않고, 키보드 입력을 ESP32-S3로 전송하지 않습니다.
 
-Switch hosts by disconnecting the previous PC in OS Bluetooth settings; closing the mapper's HID session does not disconnect Bluetooth. Boot advertising targets the last host for 3 seconds, then remains open. Security has a 15-second deadline; partial HID subscriptions do not cause disconnect loops. To repair pairing, remove only the bridge on the affected PC and pair again. Other bonds and mappings are retained. This recovery implementation still requires the hardware tests below.
+macOS:
+
+```sh
+./monitor-macos.sh
+# 포트를 직접 지정하고 로그를 파일에 추가 저장
+./monitor-macos.sh --port /dev/cu.usbserial-0001 --log esp32s3-monitor.log
+```
+
+Windows PowerShell 또는 CMD:
+
+```powershell
+.\monitor-windows.cmd
+.\monitor-windows.cmd --port COM3 --log esp32s3-monitor.log
+```
+
+`--baud`로 속도를 바꿀 수 있고 `--help`로 옵션을 확인할 수 있습니다. 로그 파일은 기존 내용을 덮어쓰지 않고 수신 원본 바이트를 추가합니다. 파일 저장을 원하지 않으면 `--log`를 생략하세요.
+
+Python 3와 `pyserial`이 필요합니다. macOS 스크립트는 프로젝트의 기존 ESP-IDF Python을 자동으로 사용하며, Windows에서는 활성화한 ESP-IDF Python 또는 PATH의 Python을 사용합니다. 별도 Python을 쓴다면 해당 Python으로 `python -m pip install pyserial==3.5`를 한 번 실행하세요. 스크립트는 의존성을 자동 설치하지 않습니다. 이미 다른 시리얼 모니터가 포트를 사용 중이면 먼저 닫으세요.
+
+리셋 명령을 보내지 않고 포트를 열기 전에 DTR/RTS를 비활성화합니다. 다만 USB 드라이버가 포트를 여는 순간 제어선을 변경할 수 있어, 모든 보드에서 물리적인 리셋 방지를 보장할 수는 없습니다. 스크립트를 열기 전의 부팅 로그는 소급해서 읽을 수 없습니다.
+
+## 문자열 매크로와 USB 제품명
+
+새 USB 제품명은 `USB Keyboard & Mouse`이며 제조사·고유 일련번호와 전용 설정용 HID를 유지합니다. Feature ID 5는 기존 키 설정, 새 ID 6은 버튼별 매크로 전송입니다. 매크로는 NVS `remote_macro`에 독립 저장됩니다. 문자열은 미국식 QWERTY의 ASCII와 Enter·Tab을 지원합니다. 업로드 중인 데이터를 실행하지 않고, COMMIT 시 전체 검증·revision 확인·NVS 저장을 완료한 뒤 활성화합니다.
+
+실행기는 NimBLE 소유 태스크의 타이머에서 동작하며 대기 중에도 취소·연결 이벤트를 처리합니다. 키보드 전송은 기존 USB 큐와 진행 중 전송이 비었을 때만 진행해 과거 입력을 몰아서 재생하지 않습니다. USB 전송 실패, 연결 변경, 절전, 리모컨 연결 종료와 모드 변경은 매크로 및 임시 업로드를 취소합니다. 중지 시 키를 해제하고 재연결 후 자동 재개하지 않습니다. 실제 USB 열거·입력 간격·대상 프로그램 호환성은 기기로 확인해야 합니다. 상세 사용법과 제한은 [파이썬 앱 문서](../python/README.md#문자열-매크로)를 참고하세요.

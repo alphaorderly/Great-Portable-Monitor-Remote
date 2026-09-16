@@ -1,4 +1,4 @@
-"""Decode only the selected ESP32's reports; never infer the remote's mode."""
+"""Decode only the selected ESP32-S3's reports; never infer the remote's mode."""
 from dataclasses import dataclass
 from mapping import ACTIONS, KEY
 from protocol import ButtonState, Report, button_name

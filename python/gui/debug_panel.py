@@ -1,4 +1,4 @@
-"""An opt-in, bounded live view of ESP32 button recognition in two test modes."""
+"""An opt-in, bounded live view of ESP32-S3 button recognition in two test modes."""
 from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -18,9 +18,10 @@ class DebugPanel(QWidget):
         self.connected = False
         self.counts = {}
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setContentsMargins(0, 16, 0, 0)
+        layout.setSpacing(12)
         controls = QHBoxLayout()
-        self.enabled = QCheckBox("디버깅 모드 · 입력 기록")
+        self.enabled = QCheckBox("입력 기록")
         controls.addWidget(self.enabled)
         controls.addStretch()
         controls.addWidget(QLabel("테스트할 모드"))
@@ -35,9 +36,9 @@ class DebugPanel(QWidget):
         note.setWordWrap(True)
         note.setObjectName("muted")
         layout.addWidget(note)
-        self.latest = QLabel("디버깅 모드를 켜고 기기를 연결하세요.")
+        self.latest = QLabel("장치를 연결하고 입력 기록을 시작하세요.")
         self.latest.setWordWrap(True)
-        self.latest.setObjectName("status")
+        self.latest.setObjectName("title")
         layout.addWidget(self.latest)
         self.stats = QLabel("수신 0 · 원본 순번 누락 0 · 해석 제외 0 · 표시 누락 0")
         self.stats.setObjectName("muted")
@@ -46,16 +47,15 @@ class DebugPanel(QWidget):
         comparison = QWidget()
         comparison_layout = QVBoxLayout(comparison)
         comparison_layout.setContentsMargins(0, 0, 0, 0)
-        comparison_layout.addWidget(QLabel("모드별 인식 비교 · 누름/초기 상태 인식 횟수"))
+        comparison_layout.addWidget(QLabel("모드별 인식 횟수"))
         self.comparison = QTableWidget(0, 3)
         self.comparison.setHorizontalHeaderLabels(["인식한 입력", "일반 모드", "마우스 커서 모드"])
         self.comparison.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         comparison_layout.addWidget(self.comparison)
-        split.addWidget(comparison)
         history = QWidget()
         history_layout = QVBoxLayout(history)
         history_layout.setContentsMargins(0, 0, 0, 0)
-        history_layout.addWidget(QLabel("최근 입력 기록 · 최대 300줄 · 마우스 이동은 초당 최대 10회 표시"))
+        history_layout.addWidget(QLabel("최근 입력"))
         self.history = QTableWidget(0, 6)
         self.history.setHorizontalHeaderLabels(["시각", "테스트 모드", "입력 종류", "인식 결과", "상태", "원시 HID"])
         self.history.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
@@ -63,11 +63,29 @@ class DebugPanel(QWidget):
             self.history.setColumnWidth(column, width)
         history_layout.addWidget(self.history)
         split.addWidget(history)
-        split.setSizes([220, 330])
+        split.addWidget(comparison)
+        self.comparison_toggle = QCheckBox("모드별 집계 표시")
+        self.comparison_toggle.toggled.connect(comparison.setVisible)
+        comparison.setVisible(False)
+        self.raw_toggle = QCheckBox("원시 HID 표시")
+        self.raw_toggle.toggled.connect(lambda visible: self.history.setColumnHidden(5, not visible))
+        self.history.setColumnHidden(5, True)
+        view_options = QHBoxLayout()
+        view_options.addWidget(self.comparison_toggle)
+        view_options.addWidget(self.raw_toggle)
+        view_options.addStretch()
+        limits = QLabel("최대 300줄 · 마우스 이동은 초당 10회")
+        limits.setObjectName("muted")
+        view_options.addWidget(limits)
+        layout.addLayout(view_options)
+        split.setSizes([330, 180])
         layout.addWidget(split, 1)
         for table in (self.comparison, self.history):
             table.verticalHeader().hide()
-            table.setAlternatingRowColors(True)
+            table.setAlternatingRowColors(False)
+            table.setShowGrid(False)
+            table.verticalHeader().setDefaultSectionSize(30)
+            table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
             table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.enabled.toggled.connect(self.configure)
@@ -80,9 +98,9 @@ class DebugPanel(QWidget):
 
     def update_status(self):
         if not self.enabled.isChecked():
-            self.latest.setText("기록 중지 · 디버깅 모드를 켜면 새 입력을 기록합니다.")
+            self.latest.setText("기록 중지 · ‘입력 기록’을 켜면 시작합니다.")
         elif not self.connected:
-            self.latest.setText("연결 대기 · 위에서 ESP32를 연결하세요. 이전 기록은 남아 있습니다.")
+            self.latest.setText("연결 대기 · 위에서 ESP32-S3를 연결하세요. 이전 기록은 남아 있습니다.")
         else:
             self.latest.setText(f"{self.mode.currentText()} · 새 입력을 기다리는 중…")
 

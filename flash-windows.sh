@@ -7,7 +7,8 @@ Usage: bash ./flash-windows.sh
 
 Run in Git Bash with an activated ESP-IDF 5.5.5 environment.
 Alternatively, run the command above from an ESP-IDF terminal with Git Bash on PATH.
-Detect serial ports and select the port, flash mode, and serial monitor in a menu.
+Select the ESP32-S3 UART/COM serial port; verify the chip before flashing.
+S3: use UART/COM for flashing and logs, USB/OTG for PC HID.
 EOF
 }
 

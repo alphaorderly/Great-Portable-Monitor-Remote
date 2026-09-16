@@ -61,7 +61,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r python/requirements-build.txt
       - name: Test Python and Qt
-        run: python -m unittest discover -s python/tests -v
+        run: |
+          python -m unittest discover -s python/tests -v
+          python -m unittest discover -s firmware/tests -v
       - name: Build native application
         run: python scripts/build_app.py --platform ${{ matrix.platform }}
       - name: Test extracted application and architecture
@@ -79,7 +81,7 @@ jobs:
           if-no-files-found: error
 
   firmware:
-    name: ESP32 firmware and C regressions
+    name: Firmware (ESP32-S3) and C regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container: espressif/idf:v5.5.5
@@ -94,7 +96,7 @@ jobs:
           python scripts/package_firmware.py
       - uses: actions/upload-artifact@v4
         with:
-          name: release-firmware-esp32
+          name: release-firmware-esp32s3
           path: release/*.zip
           if-no-files-found: error
           compression-level: 0

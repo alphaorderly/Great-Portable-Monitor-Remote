@@ -11,30 +11,31 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gui"))
-from discovery import discover, save_diagnostics, NAMED, UNVERIFIED, EXCLUDED
+from discovery import discover, save_diagnostics, device_label, NAMED, EXCLUDED
 from connection import ConnectionState
 from test_connection import Endpoint, device_info
 
 
-def candidate(path=b"ble-candidate", **overrides):
-    return dict(path=path, usage_page=0xff00, usage=1, product_string="",
-                manufacturer_string="", bus_type=2) | overrides
+def candidate(path=b"usb-candidate", **overrides):
+    return dict(path=path, usage_page=0xff00, usage=1, product_string="ESP32-S3 Remote Bridge",
+                manufacturer_string="Local Remote Bridge", bus_type=1) | overrides
 
 
 class DiscoveryTests(unittest.TestCase):
     def test_metadata_matrix_and_usb_collision(self):
         cases = [
-            (candidate(product_string="ESP32 Remote Bridge"), NAMED),
-            (candidate(product_string="esp32 remote bridge"), NAMED),
+            (candidate(product_string="ESP32-S3 Remote Bridge"), NAMED),
+            (candidate(product_string="esp32-s3 remote bridge"), NAMED),
             (candidate(manufacturer_string="Local Remote Bridge", bus_type=0), NAMED),
-            (candidate(), UNVERIFIED),
-            (candidate(product_string=None, manufacturer_string=None), UNVERIFIED),
-            (candidate(product_string="Bluetooth HID Device", manufacturer_string="Microsoft"), UNVERIFIED),
-            (candidate(bus_type=1, vendor_id=0x046d, product_id=0xc548), EXCLUDED),
-            (candidate(bus_type=0), EXCLUDED),
-            (candidate(bus_type=None), EXCLUDED),
+            (candidate(), NAMED),
+            (candidate(bus_type=2), EXCLUDED),
+            (candidate(product_string=None, manufacturer_string=None), EXCLUDED),
+            (candidate(product_string="Bluetooth HID Device", manufacturer_string="Microsoft", bus_type=2), EXCLUDED),
+            (candidate(product_string="Other USB", bus_type=1, vendor_id=0x046d, product_id=0xc548), EXCLUDED),
+            (candidate(bus_type=0), NAMED),
+            (candidate(bus_type=None), NAMED),
             (candidate(usage=2), EXCLUDED),
-            (candidate(usage_page=1, usage=6, product_string="ESP32 Remote Bridge"), EXCLUDED),
+            (candidate(usage_page=1, usage=6, product_string="ESP32-S3 Remote Bridge"), EXCLUDED),
             (candidate(path=b""), EXCLUDED),
         ]
         inventory = [device for device, _ in cases]
@@ -46,6 +47,16 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(len(result.devices), 6)
         self.assertTrue(all(r["reason"] for r in result.records))
         self.assertTrue(all("discovery_kind" not in d for d in inventory))
+
+    def test_s3_usb_only_offers_vendor_collection_and_excludes_bluetooth(self):
+        usb = candidate(path=b"usb-s3", product_string="ESP32-S3 Remote Bridge", bus_type=1, serial_number="S3-1")
+        native = [usb | {"path": b"keyboard", "usage_page": 1, "usage": 6},
+                  usb | {"path": b"mouse", "usage_page": 1, "usage": 2}]
+        ble = candidate(path=b"ble", product_string="ESP32 Remote Bridge", bus_type=2)
+        inventory = [usb, ble, *native, candidate(path=b"unknown-usb", product_string="", bus_type=1)]
+        result = discover(lambda: inventory)
+        self.assertEqual([d["path"] for d in result.devices], [b"usb-s3"])
+        self.assertIn("ESP32-S3 Remote Bridge · USB", device_label(result.devices[0]))
 
     def test_empty_and_partial_error_are_distinct(self):
         empty = discover(lambda: [])
@@ -61,7 +72,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(result.devices, [])
 
     def test_json_preserves_raw_bytes_and_exclusions(self):
-        inventory = [candidate(path=b"path\xff"), candidate(path=b"usb", bus_type=1)]
+        inventory = [candidate(path=b"path\xff"), candidate(path=b"usb", product_string="Other USB", bus_type=1)]
         result = discover(lambda: inventory)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "검색.json"
@@ -95,11 +106,11 @@ class DiscoveryTests(unittest.TestCase):
         from app import main
         output = io.StringIO()
         with patch.object(sys, "argv", ["RemoteKeyMapper", "--list"]), \
-             patch("discovery.hid.enumerate", return_value=[candidate(), candidate(path=b"usb", bus_type=1)]), \
+             patch("discovery.hid.enumerate", return_value=[candidate(), candidate(path=b"usb", product_string="Other USB", bus_type=1)]), \
              patch("app.QApplication", side_effect=AssertionError("No GUI")), contextlib.redirect_stdout(output):
             self.assertEqual(main(), 0)
-        self.assertIn("확인 필요", output.getvalue())
-        self.assertIn("ble-candidate", output.getvalue())
+        self.assertIn("ESP32-S3 Remote Bridge · USB", output.getvalue())
+        self.assertIn("usb-candidate", output.getvalue())
         self.assertNotIn("b'usb'", output.getvalue())
 
 
@@ -136,20 +147,18 @@ class CandidateGuiTests(unittest.TestCase):
     def test_search_does_not_open_and_selected_candidate_verifies_before_ready(self):
         self.select_candidate()
         self.assertEqual((self.endpoint.opens, self.endpoint.reads, self.endpoint.writes), (0, 0, 0))
-        self.assertIn("확인 필요", self.window.devices.currentText())
-        self.assertFalse(self.window.table.isEnabled())
+        self.assertIn("ESP32-S3 Remote Bridge · USB", self.window.devices.currentText())
         self.assertFalse(self.window.apply_button.isEnabled())
         def during_read():
             self.assertFalse(self.window.connected)
-            self.assertFalse(self.window.table.isEnabled())
-            self.assertIn("확인 필요", self.window.devices.currentText())
+            self.assertIn("ESP32-S3 Remote Bridge · USB", self.window.devices.currentText())
         self.endpoint.on_settings = during_read
         self.connect_selected()
-        self.assertEqual(self.endpoint.path, b"ble-candidate")
+        self.assertEqual(self.endpoint.path, b"usb-candidate")
         self.assertEqual((self.endpoint.opens, self.endpoint.reads, self.endpoint.writes), (1, 1, 0))
         self.assertTrue(self.window.connected)
         self.assertTrue(self.window.table.isEnabled())
-        self.assertIn("ESP32 Remote Bridge", self.window.devices.currentText())
+        self.assertIn("ESP32-S3 Remote Bridge", self.window.devices.currentText())
         self.window.mouse_speed.setValue(8)
         self.assertTrue(self.window.apply_button.isEnabled())
         self.endpoint.on_settings = None
@@ -165,27 +174,46 @@ class CandidateGuiTests(unittest.TestCase):
             self.connect_selected()
         self.assertEqual(self.window.connection_state, ConnectionState.ERROR)
         self.assertIn("프로토콜 불일치", self.window.status.text())
-        self.assertFalse(self.window.table.isEnabled())
         self.assertFalse(self.window.apply_button.isEnabled())
         self.assertEqual(self.endpoint.closes, 1)
         self.assertEqual(self.endpoint.writes, 0)
         self.assertIsNone(self.worker.retry.retry_at)
 
     def test_candidate_reconnect_preserves_draft_and_uses_new_verified_path(self):
-        self.inventory[1]["serial_number"] = "BLE-1"
+        self.inventory[1]["serial_number"] = "S3-2"
         self.select_candidate()
         self.connect_selected()
         self.window.mouse_speed.setValue(8)
         self.endpoint.input_error = OSError("disconnected")
         self.worker.poll()
-        self.assertIn("확인 필요", self.window.devices.currentText())
+        self.assertIn("ESP32-S3 Remote Bridge · USB", self.window.devices.currentText())
         self.assertFalse(self.window.apply_button.isEnabled())
         self.endpoint.input_error = None
-        self.inventory[1] = candidate(path=b"new-ble-path", serial_number="BLE-1")
+        self.inventory[1] = candidate(path=b"new-usb-path", serial_number="S3-2")
         self.worker.retry.retry_at = 0
         self.worker.poll()
         self.assertTrue(self.window.connected)
-        self.assertEqual(self.window.devices.currentData(), b"new-ble-path")
+        self.assertEqual(self.window.devices.currentData(), b"new-usb-path")
+        self.assertEqual(self.window.mouse_speed.value(), 8)
+        self.assertTrue(self.window.dirty)
+        self.assertEqual(self.endpoint.writes, 0)
+
+    def test_usb_replug_changes_path_preserves_draft_and_never_repeats_save(self):
+        self.inventory = [candidate(path=b"usb-s3", product_string="ESP32-S3 Remote Bridge", bus_type=1, serial_number="S3-1")]
+        self.worker.command("scan")
+        self.connect_selected()
+        self.assertIn("ESP32-S3 Remote Bridge · USB", self.window.devices.currentText())
+        self.window.mouse_speed.setValue(8)
+        self.endpoint.input_error = OSError("USB unplugged")
+        self.worker.poll()
+        self.assertFalse(self.window.connected)
+        self.inventory[0]["path"] = b"replugged-usb-s3"
+        self.endpoint.input_error = None
+        self.worker.retry.retry_at = 0
+        self.worker.poll()
+        self.assertTrue(self.window.connected)
+        self.assertEqual(self.window.devices.currentData(), b"replugged-usb-s3")
+        self.assertIn("ESP32-S3 Remote Bridge · USB", self.window.devices.currentText())
         self.assertEqual(self.window.mouse_speed.value(), 8)
         self.assertTrue(self.window.dirty)
         self.assertEqual(self.endpoint.writes, 0)
@@ -213,7 +241,7 @@ class CandidateGuiTests(unittest.TestCase):
                 self.window.export_diagnostics()
             report = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(report["scanned_at"], last.scanned_at)
-        self.assertEqual(report["devices"][1]["classification"], UNVERIFIED)
+        self.assertEqual(report["devices"][1]["classification"], NAMED)
         self.assertEqual(self.window.revision, revision)
         self.assertTrue(self.window.connected)
 

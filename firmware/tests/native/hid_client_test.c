@@ -23,10 +23,10 @@ static uint8_t last_forwarded[8];
 static bool bridge_ready;
 static unsigned mouse_forwarded;
 static uint8_t last_mouse[4];
-void mac_hid_remote_ready(bool ready) { bridge_ready=ready; }
-void mac_hid_keyboard(const uint8_t keyboard[8]) { ++forwarded; memcpy(last_forwarded,keyboard,8); }
-void mac_hid_remote_mouse(const uint8_t mouse[4]) { ++mouse_forwarded; memcpy(last_mouse,mouse,4); }
-void mac_hid_sensor_mode(bool cursor) { (void)cursor; }
+void hid_input_remote_ready(bool ready) { bridge_ready=ready; }
+void hid_input_keyboard(const uint8_t keyboard[8]) { ++forwarded; memcpy(last_forwarded,keyboard,8); }
+void hid_input_remote_mouse(const uint8_t mouse[4]) { ++mouse_forwarded; memcpy(last_mouse,mouse,4); }
+void hid_input_sensor_mode(bool cursor) { (void)cursor; }
 
 void test_log(const char *fmt, ...)
 {

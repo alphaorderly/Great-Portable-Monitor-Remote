@@ -1,4 +1,4 @@
-"""Apply the narrowly scoped ESP-IDF 5.5.5 NimBLE identity fix, idempotently."""
+"""Apply narrowly scoped ESP-IDF 5.5.5 NimBLE compatibility fixes, idempotently."""
 from pathlib import Path
 import sys
 
